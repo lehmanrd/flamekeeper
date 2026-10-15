@@ -78,6 +78,7 @@ export function validateValue(s: SettingDef, v: unknown): string | null {
   }
   if (typeof v !== "number" || Number.isNaN(v)) return "Enter a number";
   if (s.type === "duration_ns" && !Number.isInteger(v)) return "Must be whole nanoseconds";
+  if (s.type === "int" && !Number.isInteger(v)) return "Must be a whole number";
   if ((s.min !== undefined && v < s.min) || (s.max !== undefined && v > s.max)) {
     return `Allowed: ${rangeText(s)}`;
   }

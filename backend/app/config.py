@@ -35,7 +35,8 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     database_url: str | None = None
 
-    default_image_tag: str = "latest"
+    # Wine, not Proton ("latest"): the Proton build crash-loops on game version 1.0.
+    default_image_tag: str = "stable-wine"
     default_puid: int = 4711
     default_pgid: int = 4711
     first_query_port: int = 15637

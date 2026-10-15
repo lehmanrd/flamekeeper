@@ -26,6 +26,16 @@ _SETTING = re.compile(
     r"(?P<body>.*?)(?=\n\n\n|\Z)",
     re.M | re.S,
 )
+# Short form, used for settings added in 1.0.0.0:
+#   Required Flame level to enable placing Flame Altars into the Shroud
+#   Default: "flameLevelFogRemoval": 11
+#   Options: 0-20
+_SHORT_SETTING = re.compile(
+    r'^(?P<title>[^\n"]+?)[ \t]*\nDefault:\s*"(?P<key>\w+)":\s*(?P<default>[^\n]+?)[ \t]*\n'
+    r"(?P<body>.*?)(?=\n\n|\Z)",
+    re.M | re.S,
+)
+_RANGE = re.compile(r"^\s*(?P<min>[\d.]+)\s*-\s*(?P<max>[\d.]+)\s*$")
 _MIN = re.compile(r"^Min value:\s*(?P<v>[\d.]+)\s*(?P<unit>minutes?)?", re.M)
 _MAX = re.compile(r"^Max value:\s*(?P<v>[\d.]+)\s*(?P<unit>minutes?)?", re.M)
 _OPTIONS = re.compile(r"^Options:\s*(?P<v>.+)$", re.M)
@@ -78,6 +88,13 @@ def parse_readme(text: str) -> ServerReadme:
     version = m.group("v") if (m := _VERSION.search(text)) else None
 
     settings: dict[str, ReadmeSetting] = {}
+    # Short-form entries first: a full entry for the same key further down wins.
+    for m in _SHORT_SETTING.finditer(text):
+        s = ReadmeSetting(key=m.group("key"), title=m.group("title").strip(),
+                          default=_scalar(m.group("default")))
+        if (opt := _OPTIONS.search(m.group("body"))) and (r := _RANGE.match(opt.group("v"))):
+            s.min, s.max = float(r.group("min")), float(r.group("max"))
+        settings[s.key] = s
     for m in _SETTING.finditer(text):
         body = m.group("body")
         s = ReadmeSetting(key=m.group("key"), title=m.group("title").strip(),
@@ -161,10 +178,13 @@ def compare(readme: ServerReadme, schema: dict[str, Any] | None = None) -> list[
                 if rv is not None and sv is not None and float(rv) != float(sv):
                     out.append(Drift("range", key, f"{s['label']}: {bound} is {rv:g} in the "
                                      f"readme, {sv:g} in the schema", readme=rv, schema=sv))
+    doc_settings = (readme.default_document or {}).get("gameSettings") or {}
+    for key in doc_settings.keys() - ours.keys() - readme.settings.keys():
+        out.append(Drift("new_setting", key, f"New game setting '{key}' (in the default "
+                         "config) is not in the schema yet", readme=doc_settings[key]))
     for key, s in ours.items():
         if key not in readme.settings:
             out.append(Drift("missing_setting", key, f"{s['label']} ({key}) is not in the readme"))
-    doc_settings = (readme.default_document or {}).get("gameSettings") or {}
     for key, value in doc_settings.items():
         s = ours.get(key)
         if s is not None and value != s["default"]:

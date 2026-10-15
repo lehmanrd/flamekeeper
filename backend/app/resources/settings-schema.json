@@ -232,6 +232,10 @@
           "label": "Normal"
         },
         {
+          "value": "Automatic",
+          "label": "Automatic"
+        },
+        {
           "value": "Many",
           "label": "More"
         },
@@ -246,8 +250,8 @@
         "Hard": "Many",
         "Survival": "Many"
       },
-      "description": "Controls the number of enemies in the world.",
-      "$verified": "Verified on a real server: 'Many' and 'Extreme' boot and are kept. In game, 'Many' shows 'More' and 'Extreme' shows 'Many'."
+      "description": "Controls the number of enemies in the world. Automatic (added in 1.0) adjusts it to the game.",
+      "$verified": "Verified on a real server: 'Many' and 'Extreme' boot and are kept. In game, 'Many' shows 'More' and 'Extreme' shows 'Many'. 'Automatic' comes from Keen's 1.0.0.0 readme and hasn't been tested on a real server yet."
     },
     {
       "key": "playerHealthFactor",
@@ -705,6 +709,26 @@
       },
       "description": "Chance of being cursed by the Shroud when attacked. Hard doubles the chance; Off disables curses.",
       "$verified": "Verified on a real server: server accepts only Easy/Normal/Hard, so mornedhels' 'Off' would stop the server. 'Easy' boots and shows 'Off' in game."
+    },
+    {
+      "key": "flameLevelFogRemoval",
+      "env": "SERVER_GS_FLAME_LEVEL_FOG_REMOVAL",
+      "label": "Flame Level for Altars in the Shroud",
+      "tab": "survival",
+      "type": "int",
+      "display": "raw",
+      "min": 0,
+      "max": 20,
+      "step": 1,
+      "default": 11,
+      "presets": {
+        "Default": 11,
+        "Relaxed": 11,
+        "Hard": 11,
+        "Survival": 11
+      },
+      "description": "The Flame level needed before Flame Altars can be placed inside the Shroud.",
+      "$comment": "Added in game version 1.0.0.0 (readme: default 11, options 0-20). The server writes 11 into existing configs. Per-preset values aren't known yet; 11 for all."
     },
     {
       "key": "factoryProductionSpeedFactor",

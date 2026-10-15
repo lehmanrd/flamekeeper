@@ -346,7 +346,7 @@ def test_infra_patch_and_recreate(client: TestClient, settings: Settings,
     assert res.status_code == 422
 
     res = client.patch(f"/api/worlds/{wid}", json={"query_port": 15650, "cpu_limit": 4,
-                                                   "image_tag": "latest"})
+                                                   "image_tag": "stable-wine"})
     assert res.status_code == 200, res.text
     body = res.json()
     assert body["changed"] == ["cpu_limit", "query_port"]

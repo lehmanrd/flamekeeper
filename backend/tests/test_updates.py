@@ -82,7 +82,7 @@ def test_update_detection(client: TestClient, fake_docker: FakeDockerAdapter) ->
 def test_image_update_detection_and_job(client: TestClient, fake_docker: FakeDockerAdapter) -> None:
     world = _create(client)
     wid = world["id"]
-    image = "mornedhels/enshrouded-server:latest"
+    image = "mornedhels/enshrouded-server:stable-wine"
     fake_docker.local_digests[image] = "sha256:old"
     fake_docker.registry_digests[image] = "sha256:new"
     st = _status(client, wid, check=True)

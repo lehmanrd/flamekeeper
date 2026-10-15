@@ -128,16 +128,16 @@ def test_copy_game_files_from_another_world(client: TestClient, settings: Settin
 
 def test_app_settings(client: TestClient) -> None:
     view = client.get("/api/settings/app").json()
-    assert view["values"]["default_image_tag"] == "latest" and view["overridden"] == []
-    res = client.put("/api/settings/app", json={"default_image_tag": "stable-wine",
+    assert view["values"]["default_image_tag"] == "stable-wine" and view["overridden"] == []
+    res = client.put("/api/settings/app", json={"default_image_tag": "latest",
                                                 "first_query_port": 16000})
     assert res.status_code == 200 and sorted(res.json()["overridden"]) == \
         ["default_image_tag", "first_query_port"]
-    world = _wizard(client, display_name="Winey")
-    assert world["image"].endswith(":stable-wine") and world["query_port"] == 16000
+    world = _wizard(client, display_name="Protony")
+    assert world["image"].endswith(":latest") and world["query_port"] == 16000
     assert client.put("/api/settings/app", json={"first_query_port": 80}).status_code == 422
     assert client.put("/api/settings/app", json={"data_dir": "/"}).status_code == 422
-    res = client.put("/api/settings/app", json={"default_image_tag": "latest"})
+    res = client.put("/api/settings/app", json={"default_image_tag": "stable-wine"})
     assert res.json()["overridden"] == ["first_query_port"]
     assert client.get("/api/system/capacity?extra=1").json()["worlds"] == 2
 

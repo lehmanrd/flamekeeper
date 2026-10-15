@@ -47,6 +47,11 @@ wrote) → start. A stopped world gets saves applied straight away.
   stops the server from booting. Accepted: English, German, French, Italian, Japanese,
   Korean, Polish, Portuguese, Russian, Spanish, Thai, Turkish, Ukrainian, Chinese,
   Taiwanese, LookingForPlayers, BaseBuilding, Exploration, Roleplay.
+- Game version 1.0.0.0 added `flameLevelFogRemoval` (the Flame level needed before Flame
+  Altars can be placed in the Shroud; whole numbers 0–20, default 11) and a new
+  `randomSpawnerAmount` value, `Automatic`. The server writes `flameLevelFogRemoval: 11` into
+  existing configs on its first 1.0 boot. Both come from Keen's 1.0.0.0 readme: the
+  `Automatic` label in game and per-preset values for the new setting aren't checked yet.
 - `curseModifier` accepts only `Easy` (shown in game as "Off"), `Normal` and `Hard`.
 - `randomSpawnerAmount` `"Extreme"` is shown in game as "Many", and `"Many"` as "More".
 - Night length goes up to 60 minutes; `playerBodyHeatFactor` is a continuous 0.5–2 range.
@@ -127,7 +132,15 @@ when the user changes it.
 Other supervisord programs in the image: `enshrouded-backup`, `enshrouded-restart`,
 `enshrouded-reset-roles` and `enshrouded-bootstrap`.
 
-## Proton prefix
+## Proton and Wine builds
+
+The image comes in a Proton build (`latest`, `stable-proton`) and a Wine build
+(`stable-wine`). With game version 1.0, the Proton build fails at start and the server
+crash-loops; the Wine build runs it. FlameKeeper therefore creates new worlds with
+`stable-wine`. Switching an existing world means changing its image tag on the Server tab;
+the game files and savegame stay as they are.
+
+### Proton prefix
 
 The Proton prefix contains directory symlinks (e.g. `dosdevices/c:` → `../drive_c`).
 Copying a world's game files without them makes the server fail at once with
@@ -154,8 +167,10 @@ Every server install ships `enshrouded_server_readme.txt` next to the executable
 options, the 19 server tags, the role permissions and a full default config. The Windows
 and Linux copies are identical.
 
+Version 1.0.0.0 keeps the 0.9.0.0 text and adds a short entry at the top for each new
+setting (`Default: "key": value`, `Options: 0-20`); the parser reads both forms.
 `app/services/server_readme.py` parses it and compares it with `settings-schema.json`; for
-0.9.0.0 everything matches. FlameKeeper re-reads the readme whenever a world comes online
+1.0.0.0 everything matches. FlameKeeper re-reads the readme whenever a world comes online
 (a game update may have replaced it). If it changed and lists anything the schema doesn't
 cover, the world's event log gets a warning, and Settings → Game settings readme shows the
 differences. To update after a game patch, fix `settings-schema.json` until the readme

@@ -45,6 +45,11 @@ const spawner: SettingDef = {
   ],
   presets: { Default: "Normal", Relaxed: "Few", Hard: "Many", Survival: "Many" }, description: "",
 };
+const flameLevel: SettingDef = {
+  key: "flameLevelFogRemoval", label: "Flame Level for Altars in the Shroud", tab: "survival", type: "int",
+  display: "raw", min: 0, max: 20, step: 1, default: 11,
+  presets: { Default: 11, Relaxed: 11, Hard: 11, Survival: 11 }, description: "",
+};
 const all = [damage, starving, toStarving, spawner];
 const byKey = Object.fromEntries(all.map((s) => [s.key, s]));
 
@@ -87,6 +92,9 @@ describe("inputs", () => {
     expect(fromInput(toStarving, 15)).toBe(900_000_000_000);
     expect(inputStep(damage)).toBe(5);
     expect(inputStep(toStarving)).toBe(1);
+    expect(toInput(flameLevel, 11)).toBe(11);
+    expect(fromInput(flameLevel, 12)).toBe(12);
+    expect(inputStep(flameLevel)).toBe(1);
   });
   it("validates like the server", () => {
     expect(validateValue(damage, 2)).toBeNull();
@@ -94,6 +102,9 @@ describe("inputs", () => {
     expect(validateValue(damage, Number.NaN)).toBe("Enter a number");
     expect(validateValue(spawner, "More")).toMatch(/Unknown value/);
     expect(validateValue(starving, 1)).toBe("Must be on or off");
+    expect(validateValue(flameLevel, 20)).toBeNull();
+    expect(validateValue(flameLevel, 21)).toBe("Allowed: 0 – 20");
+    expect(validateValue(flameLevel, 2.5)).toBe("Must be a whole number");
   });
 });
 

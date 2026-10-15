@@ -144,12 +144,12 @@ function Wizard({ templates, presetDescriptions, defaultTag }: { templates: Reco
             <div className="form">
               <label htmlFor="w-tag">Image tag</label>
               <span>
-                <select id="w-tag" value={["latest", "stable-wine"].includes(s.imageTag) ? s.imageTag : "custom"} onChange={(e) => set({ imageTag: e.target.value === "custom" ? "" : e.target.value })}>
-                  <option value="latest">latest (Proton): recommended</option>
-                  <option value="stable-wine">stable-wine</option>
+                <select id="w-tag" value={["stable-wine", "latest"].includes(s.imageTag) ? s.imageTag : "custom"} onChange={(e) => set({ imageTag: e.target.value === "custom" ? "" : e.target.value })}>
+                  <option value="stable-wine">stable-wine (Wine): recommended</option>
+                  <option value="latest">latest (Proton)</option>
                   <option value="custom">pinned version…</option>
                 </select>
-                {!["latest", "stable-wine"].includes(s.imageTag) && (
+                {!["stable-wine", "latest"].includes(s.imageTag) && (
                   <input className="mono" value={s.imageTag} placeholder="tag" onChange={(e) => set({ imageTag: e.target.value })} style={{ width: 140, marginLeft: 6 }} />
                 )}
               </span>

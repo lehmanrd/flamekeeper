@@ -14,7 +14,7 @@ export interface SettingDef {
   env?: string;
   label: string;
   tab: string;
-  type: "factor" | "enum" | "bool" | "duration_ns";
+  type: "factor" | "int" | "enum" | "bool" | "duration_ns";
   display?: "percent" | "minutes" | "raw";
   min?: number;
   max?: number;

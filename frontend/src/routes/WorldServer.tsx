@@ -198,7 +198,7 @@ function ServerEditor({ world, schema, config, detail }: { world: WorldSummary; 
             {field("bind_ip", "Bind IP", { width: 160, hint: "0.0.0.0 listens on every address of the host." })}
             <label>Image</label>
             <span className="mono">{detail.infra.image_repo}</span>
-            {field("image_tag", "Image tag", { width: 160, mono: true, hint: "latest (Proton) is the default; stable-wine also exists." })}
+            {field("image_tag", "Image tag", { width: 160, mono: true, hint: "stable-wine (Wine) is the default; latest is the Proton build." })}
             {field("game_branch", "Steam branch", { width: 160, mono: true })}
             {field("steamcmd_args", "steamcmd args", { width: 220, mono: true, hint: "validate checks game files on every start." })}
             <label>Run as (PUID / PGID)</label>

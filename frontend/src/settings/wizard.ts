@@ -21,7 +21,7 @@ export interface WizardState {
   copyFrom: string; // world id, "" = download
 }
 
-export function initialState(templates: Record<string, Record<string, boolean | number>>, password: () => string, imageTag = "latest"): WizardState {
+export function initialState(templates: Record<string, Record<string, boolean | number>>, password: () => string, imageTag = "stable-wine"): WizardState {
   return {
     name: "",
     slug: "",

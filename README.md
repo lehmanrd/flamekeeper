@@ -123,6 +123,10 @@ wrote it. A "Restart required" banner shows while changes are waiting.
 Container settings on the Server tab (port, image tag, PUID/PGID, limits) apply when the
 container is recreated, or automatically on the next start of a stopped world.
 
+New worlds use the image's Wine build (`stable-wine`): since game version 1.0 the Proton
+build (`latest`) crash-loops on start. A world created with `latest` can be switched on its
+Server tab; the save is kept. Change the default for new worlds under Settings.
+
 ## More than one world
 
 Each world is its own container, data folder and UDP port (15637, 15638, … by default).

@@ -520,7 +520,7 @@ function NumberEditor({
     if (!editing) setText(Number.isFinite(shown) ? String(shown) : "");
   }, [shown, editing]);
   const step = inputStep(s);
-  const unit = s.display === "percent" ? "%" : "min";
+  const unit = s.display === "percent" ? "%" : s.type === "duration_ns" ? "min" : "";
   const nudge = (dir: number) => {
     const base = Number.isFinite(shown) ? shown : toInput(s, s.default);
     onChange(clamp(s, fromInput(s, Math.round((base + dir * step) / step) * step)));
@@ -531,7 +531,7 @@ function NumberEditor({
       <input
         inputMode="decimal"
         value={text}
-        aria-label={`${s.label} (${unit})`}
+        aria-label={unit ? `${s.label} (${unit})` : s.label}
         aria-invalid={Boolean(error)}
         title={error}
         onFocus={() => {
@@ -551,7 +551,7 @@ function NumberEditor({
           } else if (e.key === "Escape" || e.key === "Enter") (e.target as HTMLInputElement).blur();
         }}
       />
-      <span className="unit">{unit}</span>
+      {unit && <span className="unit">{unit}</span>}
       <button type="button" tabIndex={-1} aria-label={`Increase ${s.label}`} onClick={() => nudge(1)}>+</button>
     </span>
   );
@@ -570,7 +570,7 @@ function Description({
   error?: string;
   onChange: (v: SettingValue) => void;
 }) {
-  const numeric = s.type === "factor" || s.type === "duration_ns";
+  const numeric = s.type !== "bool" && s.type !== "enum";
   return (
     <aside className="card desc" aria-live="polite">
       <h2>{s.label}</h2>
