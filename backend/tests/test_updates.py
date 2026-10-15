@@ -24,11 +24,10 @@ def _manifest_build(settings: Settings, slug: str = "embervale") -> str:
     return acf.read_text().split('"buildid"')[1].split('"')[1]
 
 
-def _manual_scheduler(client: TestClient):
-    """Stop the background scheduler so the test decides when policies run."""
-    services = client.app.state.services
-    client.portal.call(services.scheduler.stop)
-    return services
+def _services(client: TestClient):
+    """The app's services; the client fixture has already stopped the background
+    scheduler, so the test decides when policies run."""
+    return client.app.state.services
 
 
 def _status(client: TestClient, wid: str, check: bool = False) -> dict:
@@ -151,7 +150,7 @@ def test_failed_auto_update_is_not_retried(client: TestClient, settings: Setting
     client.put(f"/api/worlds/{wid}/update-policy", json={"update_policy": "immediate"})
     monkeypatch.setattr(fake_docker, "_write_manifest", lambda c, build: None)  # steamcmd fails
     fake_docker.latest_build = "23200000"
-    services = _manual_scheduler(client)
+    services = _services(client)
     _status(client, wid, check=True)
     w = services.worlds.get(wid)
     jobs = client.portal.call(services.updates.tick)
@@ -171,7 +170,7 @@ def test_when_empty_waits_for_players_then_updates(client: TestClient, settings:
     monkeypatch.setattr(world_service, "WAIT_EMPTY_POLL_S", 0.05)
     world = _create(client)
     wid = world["id"]
-    services = _manual_scheduler(client)
+    services = _services(client)
     fake_docker.latest_build = "23200000"
     _status(client, wid, check=True)
     rt = services.monitor.runtime(wid)
@@ -195,7 +194,7 @@ def test_when_empty_waits_for_players_then_updates(client: TestClient, settings:
 def test_manual_policy_and_window(client: TestClient, fake_docker: FakeDockerAdapter) -> None:
     world = _create(client)
     wid = world["id"]
-    services = _manual_scheduler(client)
+    services = _services(client)
     fake_docker.latest_build = "23200000"
     _status(client, wid, check=True)
     client.put(f"/api/worlds/{wid}/update-policy", json={"update_policy": "manual"})

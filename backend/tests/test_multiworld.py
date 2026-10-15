@@ -169,9 +169,7 @@ def test_three_worlds_side_by_side(client: TestClient, settings: Settings,
                     == "stopped")
     assert online(emb) and online(kids)
 
-    # Update one: only it changes build. (Stop the scheduler first: with the default
-    # "when empty" policy it would rightly auto-update the other running world too.)
-    client.portal.call(client.app.state.services.scheduler.stop)
+    # Update one: only it changes build.
     fake_docker.latest_build = "23200000"
     client.post(f"/api/worlds/{emb['id']}/update/check")
     job = client.post(f"/api/worlds/{emb['id']}/update", json={}).json()["job_id"]

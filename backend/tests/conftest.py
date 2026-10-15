@@ -44,6 +44,9 @@ def fake_docker() -> FakeDockerAdapter:
 def client(settings: Settings, fake_docker: FakeDockerAdapter) -> Iterator[TestClient]:
     app = create_app(settings, docker=fake_docker, poll_interval=0.05)
     with TestClient(app) as c:
+        # No background scheduler: its first pass can overlap a test and start an
+        # automatic update or backup of its own. Tests run scheduled work explicitly.
+        c.portal.call(c.app.state.services.scheduler.stop)
         yield c
 
 
