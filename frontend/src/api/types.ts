@@ -469,3 +469,18 @@ export interface HostInfo {
   players: number;
   slots: number;
 }
+
+/* ---------- Login and notifications ---------- */
+
+export interface AuthStatus {
+  setup_required: boolean;
+  user: { username: string } | null;
+}
+
+export interface NotificationSettings {
+  discord_configured: boolean;
+  /** Masked: the webhook's id with its token hidden. */
+  discord_webhook: string;
+  events: string[];
+  available: { id: string; label: string; default: boolean }[];
+}

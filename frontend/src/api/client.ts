@@ -1,6 +1,8 @@
 import type { SettingsSchema } from "../settings/schema";
 import type {
   AppSettingsView,
+  AuthStatus,
+  NotificationSettings,
   BackupDetail,
   Capacity,
   CreatePreview,
@@ -61,13 +63,20 @@ export class ApiError extends Error {
   }
 }
 
+/** Fired when the server says we're not signed in; the auth gate shows the login page. */
+export const UNAUTHORIZED_EVENT = "fk:unauthorized";
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const form = body instanceof FormData;
+  // The server refuses changes without this header (cross-site request protection).
+  const headers: Record<string, string> = { "X-FlameKeeper": "1" };
+  if (body !== undefined && !form) headers["Content-Type"] = "application/json";
   const res = await fetch(apiUrl(path), {
     method,
-    headers: body !== undefined && !form ? { "Content-Type": "application/json" } : undefined,
+    headers,
     body: body === undefined ? undefined : form ? body : JSON.stringify(body),
   });
+  if (res.status === 401 && !path.startsWith("/auth/")) window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
   if (!res.ok) {
     let title = res.statusText;
     let detail = "";
@@ -87,6 +96,19 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 }
 
 export const api = {
+  authStatus: () => request<AuthStatus>("GET", "/auth/status"),
+  setup: (body: { setup_code: string; username: string; password: string }) =>
+    request<{ user: { username: string } }>("POST", "/auth/setup", body),
+  login: (username: string, password: string) =>
+    request<{ user: { username: string } }>("POST", "/auth/login", { username, password }),
+  logout: () => request<void>("POST", "/auth/logout"),
+  changePassword: (current_password: string, new_password: string) =>
+    request<void>("POST", "/auth/password", { current_password, new_password }),
+  notifications: () => request<NotificationSettings>("GET", "/settings/notifications"),
+  saveNotifications: (body: { discord_webhook?: string; events?: string[] }) =>
+    request<NotificationSettings>("PUT", "/settings/notifications", body),
+  testNotification: (discord_webhook?: string) =>
+    request<void>("POST", "/settings/notifications/test", { discord_webhook }),
   system: () => request<SystemInfo>("GET", "/system"),
   rerunSelfcheck: () => request<unknown>("POST", "/system/selfcheck"),
   settingsReadme: () => request<SettingsReadmeReport>("GET", "/system/settings-readme"),

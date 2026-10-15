@@ -23,6 +23,9 @@ Usage: flamekeeper <command>
   update [--version v]
                       Upgrade FlameKeeper (re-runs the installer, keeps settings)
   doctor              Check Docker, ports, disk and the controller's self-check
+  setup-code          Show the code for creating the admin account (first setup)
+  reset-admin         Forgot the password: remove the admin account and sign everyone
+                      out, then show a new setup code
   uninstall [--purge] Remove the controller. --purge also deletes all game servers,
                       saves and backups.
   version             Show the installed version
@@ -119,13 +122,9 @@ cmd_doctor() {
     echo "Disk: ${free_gb} GB free in $data_dir"
   fi
   echo "Self-check:"
-  local system
-  if system="$(curl -fsS --max-time 10 -X POST "$(ui_url)/api/system/selfcheck" 2>/dev/null)"; then
-    printf '%s\n' "$system" | tr '{' '\n' |
-      sed -n 's/.*"label":"\([^"]*\)","status":"\([^"]*\)","detail":"\([^"]*\)".*/  [\2] \1: \3/p'
-    case "$system" in *'"fatal_error":null'*) ;; *) rc=1 ;; esac
-  else
-    echo "  controller not answering at $(ui_url)"; rc=1
+  # Runs inside the controller container: the API needs a signed-in admin.
+  if ! dk exec flamekeeper python -m app.cli selfcheck; then
+    rc=1
   fi
   return "$rc"
 }
@@ -161,6 +160,14 @@ cmd_uninstall() {
   fi
 }
 
+cmd_reset_admin() {
+  need_install
+  local answer
+  read -r -p "Remove the admin account and sign everyone out? Game servers keep running. [y/N] " answer </dev/tty || answer=""
+  [[ "$answer" =~ ^[Yy]$ ]] || die "cancelled"
+  dk exec flamekeeper python -m app.cli reset-admin
+}
+
 main() {
   local cmd="${1:-}"
   [[ $# -gt 0 ]] && shift
@@ -172,6 +179,8 @@ main() {
     restart) compose up -d --force-recreate ;;
     update) cmd_update "$@" ;;
     doctor) cmd_doctor ;;
+    setup-code) dk exec flamekeeper python -m app.cli setup-code ;;
+    reset-admin) cmd_reset_admin ;;
     uninstall) cmd_uninstall "$@" ;;
     version) env_get FLAMEKEEPER_IMAGE | sed 's/.*://' ;;
     "" | -h | --help | help) usage ;;

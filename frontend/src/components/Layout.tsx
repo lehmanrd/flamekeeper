@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useMatch } from "react-router-dom";
 import { api } from "../api/client";
+import { useAuth } from "./AuthGate";
 import { useLiveUpdates, useWorlds } from "../hooks/live";
 
 const WORLD_PAGES = [
@@ -28,6 +29,7 @@ export function Layout() {
   const { connected } = useLiveUpdates();
   const { data: worlds = [] } = useWorlds();
   const { data: system } = useQuery({ queryKey: ["system"], queryFn: api.system, staleTime: 60_000 });
+  const auth = useAuth();
   const match = useMatch("/worlds/:slug/*");
   const world = match ? worlds.find((w) => w.slug === match.params.slug) : undefined;
   const [navOpen, setNavOpen] = useState(false);
@@ -69,8 +71,13 @@ export function Layout() {
           </NavLink>
         </nav>
         <div className="foot">
-          No authentication: run on a trusted network only.
-          <br />
+          {auth && (
+            <>
+              Signed in as <b>{auth.username}</b> ·{" "}
+              <button className="linklike" onClick={auth.signOut}>Sign out</button>
+              <br />
+            </>
+          )}
           {system ? `v${system.version}` : ""}
           {!connected && <span style={{ color: "var(--warn)" }}> · reconnecting…</span>}
         </div>

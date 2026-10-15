@@ -12,6 +12,7 @@ container; FlameKeeper creates and manages those containers for you.
   from a backup.
 - **Updates:** game and container image updates, automatic or manual, with a backup first.
 - **Monitoring:** CPU, memory, network and player charts, and player history.
+- **Access:** an admin login, and Discord notifications for server events.
 
 FlameKeeper is an independent project, not affiliated with Keen Games or the
 mornedhels image.
@@ -64,6 +65,8 @@ flamekeeper status            controller and game servers
 flamekeeper logs [-f]         controller logs
 flamekeeper update            upgrade to the latest release (keeps settings)
 flamekeeper doctor            check Docker, disk and the self-check
+flamekeeper setup-code        show the code for creating the admin account
+flamekeeper reset-admin       forgot the password: start over with a new admin account
 flamekeeper start|stop|restart
 flamekeeper uninstall [--purge]
 ```
@@ -79,12 +82,28 @@ directory at the **same path** inside and outside the container (`/srv/flamekeep
 FlameKeeper creates game containers through the host's Docker, which needs host paths. It
 checks this at startup and tells you if it's wrong.
 
+## Signing in
+
+The first time you open FlameKeeper, it asks you to create the admin account. That needs
+the **setup code** the installer prints at the end (or run `flamekeeper setup-code`), so
+nobody else on your network can claim the install first. Sign-ins last 30 days.
+
+Forgot the password? `sudo flamekeeper reset-admin` removes the account (game servers keep
+running) and prints a new setup code. You can change the password under Settings.
+
+## Notifications
+
+Settings → Discord notifications posts to a Discord channel through a webhook: servers
+coming online, crashing or stopping, players joining or leaving, updates, restores, and
+anything that fails. Pick which ones you want, and use "Send test" to check it works.
+
 ## Security
 
-FlameKeeper has **no login**. Anyone who can reach the web UI can control your servers
-and read role passwords. Keep it on a trusted network, or bind it to `127.0.0.1` and put
-it behind a reverse proxy that adds authentication (set `BASE_PATH` to serve it under a
-sub-path). It also has access to the Docker socket, which is equivalent to root on the host.
+FlameKeeper serves plain HTTP, so on an untrusted network bind it to `127.0.0.1`
+(`--bind 127.0.0.1`) and put it behind a reverse proxy with HTTPS (set `BASE_PATH` to
+serve it under a sub-path). Anyone signed in can control your servers and read role
+passwords. FlameKeeper also has access to the Docker socket, which is equivalent to root on
+the host.
 
 ## Changing settings
 

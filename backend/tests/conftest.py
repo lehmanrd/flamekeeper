@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -40,14 +41,46 @@ def fake_docker() -> FakeDockerAdapter:
     return FakeDockerAdapter()
 
 
+ADMIN = {"username": "admin", "password": "correct-horse-battery"}
+CSRF = {"X-FlameKeeper": "1"}
+
+
 @pytest.fixture
-def client(settings: Settings, fake_docker: FakeDockerAdapter) -> Iterator[TestClient]:
+def anon(settings: Settings, fake_docker: FakeDockerAdapter) -> Iterator[TestClient]:
+    """A client before first setup: no admin account, not signed in."""
     app = create_app(settings, docker=fake_docker, poll_interval=0.05)
-    with TestClient(app) as c:
+    with TestClient(app, headers=CSRF) as c:
         # No background scheduler: its first pass can overlap a test and start an
         # automatic update or backup of its own. Tests run scheduled work explicitly.
         c.portal.call(c.app.state.services.scheduler.stop)
         yield c
+
+
+def setup_code(settings: Settings) -> str:
+    return (settings.data_dir / "setup-code").read_text().strip()
+
+
+def sign_in(c: TestClient, settings: Settings) -> TestClient:
+    """Create the admin through first setup, or sign in if it already exists."""
+    if c.get("/api/auth/status").json()["setup_required"]:
+        res = c.post("/api/auth/setup", json={"setup_code": setup_code(settings), **ADMIN})
+    else:
+        res = c.post("/api/auth/login", json=ADMIN)
+    assert res.status_code == 200, res.text
+    return c
+
+
+@contextmanager
+def admin_client(app, settings: Settings) -> Iterator[TestClient]:  # noqa: ANN001
+    """A signed-in client for an app a test builds itself."""
+    with TestClient(app, headers=CSRF) as c:
+        yield sign_in(c, settings)
+
+
+@pytest.fixture
+def client(anon: TestClient, settings: Settings) -> TestClient:
+    """Signed in as the admin created through first setup."""
+    return sign_in(anon, settings)
 
 
 def wait_job(client: TestClient, job_id: str, timeout: float = 10) -> dict:

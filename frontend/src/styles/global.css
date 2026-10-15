@@ -311,3 +311,18 @@ ol.timeline .what { min-width: 0; overflow-wrap: anywhere; }
 .ok-text { color: var(--ok); font-size: 13px; }
 table.wizard-roles td { padding: 6px; }
 @media (max-width: 700px) { .preset-cards { grid-template-columns: 1fr; } }
+
+/* Sign-in and first setup */
+.auth-page { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; background: var(--bg); }
+.auth-card { width: min(420px, 100%); padding: 28px; }
+.auth-brand { padding: 0 0 14px; }
+.auth-card h1 { margin: 0 0 12px; font-size: 24px; }
+.auth-form { display: flex; flex-direction: column; gap: 6px; }
+.auth-form label { font-size: 13px; color: var(--muted); margin-top: 6px; }
+.auth-form .btn { margin-top: 14px; justify-content: center; }
+.linklike { background: none; border: 0; padding: 0; color: var(--gold2); cursor: pointer; font: inherit; text-decoration: underline; }
+.notify-events { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; margin: 8px 0 4px; }
+@media (max-width: 700px) { .notify-events { grid-template-columns: 1fr; } }
+.account-form { grid-template-columns: 150px minmax(0, 1fr); }
+.account-form input { width: 100%; max-width: 280px; box-sizing: border-box; }
+.form select, .form input { max-width: 100%; }

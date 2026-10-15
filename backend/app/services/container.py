@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from app.config import Settings
 from app.services.app_settings import AppSettings
+from app.services.auth import AuthService
 from app.services.backup_service import BackupService
 from app.services.bus import Bus
 from app.services.config_service import ConfigService
@@ -14,10 +15,11 @@ from app.services.events import EventLog
 from app.services.jobs import JobManager
 from app.services.metrics import MetricsService
 from app.services.monitor import Monitor
+from app.services.notifications import Notifier
 from app.services.scheduler import Scheduler
 from app.services.selfcheck import SelfCheckResult
 from app.services.update_service import UpdateService
-from app.services.world_service import WorldService
+from app.services.world_service import WorldError, WorldService
 
 
 @dataclass
@@ -35,6 +37,8 @@ class Services:
     updates: UpdateService
     metrics: MetricsService
     app_settings: AppSettings
+    auth: AuthService
+    notifier: Notifier
     selfcheck: SelfCheckResult | None = None
 
     @classmethod
@@ -60,5 +64,16 @@ class Services:
         monitor.update_summary = updates.summary
         scheduler = Scheduler(worlds, backups, updates,
                               **({"tick": poll_interval} if poll_interval else {}))
+        auth = AuthService(settings.data_dir)
+
+        def world_name(world_id: str) -> str | None:
+            try:
+                return worlds.get(world_id).display_name
+            except WorldError:
+                return None
+
+        notifier = Notifier(world_name)
+        events.listeners.append(notifier.on_event)
+        jobs.listeners.append(notifier.on_job)
         return cls(settings, docker, bus, jobs, events, config, worlds, monitor, backups,
-                   scheduler, updates, metrics, app_settings)
+                   scheduler, updates, metrics, app_settings, auth, notifier)

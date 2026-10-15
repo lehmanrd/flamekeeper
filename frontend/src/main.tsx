@@ -3,6 +3,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { RouterProvider, createBrowserRouter } from "react-router-dom";
 import { BASE } from "./api/client";
+import { AuthGate } from "./components/AuthGate";
 import { JobsProvider } from "./components/JobsDrawer";
 import { Layout } from "./components/Layout";
 import { NewWorld } from "./routes/NewWorld";
@@ -50,9 +51,11 @@ const router = createBrowserRouter(
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <JobsProvider>
-        <RouterProvider router={router} />
-      </JobsProvider>
+      <AuthGate>
+        <JobsProvider>
+          <RouterProvider router={router} />
+        </JobsProvider>
+      </AuthGate>
     </QueryClientProvider>
   </StrictMode>,
 );

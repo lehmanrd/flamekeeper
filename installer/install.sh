@@ -525,10 +525,16 @@ summary() {
   printf '    Open  %shttp://%s:%s%s/%s\n' "$C_BOLD" "$host" "$FK_PORT" "${FK_BASE_PATH%/}" "$C_RESET"
   printf '    Data  %s\n' "$FK_DATA_DIR"
   printf '    Manage with: flamekeeper status | logs | update | doctor | uninstall\n\n'
+  # First install (or after reset-admin): the code that creates the admin account.
+  local code
+  code="$(docker_cmd exec flamekeeper python -m app.cli setup-code 2>/dev/null || true)"
+  if [[ "$code" =~ ^[A-Z0-9]{4}-[A-Z0-9]{4}$ ]]; then
+    printf '    %sSetup code  %s%s  (create the admin account with it; run: flamekeeper setup-code to see it again)\n\n' \
+      "$C_BOLD" "$code" "$C_RESET"
+  fi
   if [[ "$FK_BIND" == "0.0.0.0" ]]; then
-    printf '    %sNote:%s FlameKeeper has no login. Anyone who can reach port %s can control\n' "$C_YEL" "$C_RESET" "$FK_PORT"
-    printf '    your servers. Keep it on a trusted network, or re-run with --bind 127.0.0.1\n'
-    printf '    and put it behind a reverse proxy with authentication.\n\n'
+    printf '    %sNote:%s the web UI uses plain HTTP. On an untrusted network, re-run with\n' "$C_YEL" "$C_RESET"
+    printf '    --bind 127.0.0.1 and put it behind a reverse proxy with HTTPS.\n\n'
   fi
   printf '    %sPlayers outside your network need UDP %s forwarded on your router.%s\n\n' "$C_DIM" "$GAME_PORTS" "$C_RESET"
 }

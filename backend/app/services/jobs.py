@@ -110,6 +110,8 @@ class JobManager:
         self.bus = bus
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._world_locks: dict[str, asyncio.Lock] = {}
+        # Called with a job when it finishes (notifications). Must not block or raise.
+        self.listeners: list[Callable[[dict[str, Any]], None]] = []
 
     def world_lock(self, world_id: str) -> asyncio.Lock:
         return self._world_locks.setdefault(world_id, asyncio.Lock())
@@ -189,6 +191,12 @@ class JobManager:
                 setattr(job, k, v)
             data = job_to_dict(job)
         self.publish(data)
+        if fields.get("status") in TERMINAL:
+            for listener in self.listeners:
+                try:
+                    listener(data)
+                except Exception:
+                    log.exception("job listener failed")
 
     def cancel(self, job_id: str) -> bool:
         task = self._tasks.get(job_id)

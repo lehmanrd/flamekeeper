@@ -49,6 +49,14 @@ on_host 'curl -fsS localhost:8088/api/health >/dev/null && echo "   health ok on
 echo "== CLI"
 on_host 'flamekeeper status'
 on_host 'flamekeeper doctor'
+code="$(on_host 'flamekeeper setup-code')"
+[[ "$code" =~ ^[A-Z0-9]{4}-[A-Z0-9]{4}$ ]] || { echo "unexpected setup code: $code"; exit 1; }
+echo "   setup code $code"
+on_host "curl -fsS -H 'X-FlameKeeper: 1' -H 'Content-Type: application/json' \
+  -d '{\"setup_code\": \"$code\", \"username\": \"admin\", \"password\": \"e2e-password\"}' \
+  localhost:8088/api/auth/setup; echo"
+on_host 'flamekeeper setup-code' && { echo "unexpected: setup code after setup"; exit 1; } \
+  || echo "   setup done; no setup code any more"
 on_host 'sudo flamekeeper uninstall'
 on_host 'test ! -e /opt/flamekeeper && test ! -e /usr/local/bin/flamekeeper && sudo test -d /srv/flamekeeper && echo "   uninstall removed controller, kept data"'
 echo "== PASS"

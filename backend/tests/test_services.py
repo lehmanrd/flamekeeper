@@ -12,7 +12,7 @@ from app.services.bus import Bus
 from app.services.docker_adapter import ContainerSpec
 from app.services.docker_fake import FakeDockerAdapter
 from app.services.jobs import JobManager
-from tests.conftest import wait_for, wait_job
+from tests.conftest import admin_client, wait_for, wait_job
 
 
 def _spec(name: str, labels: dict[str, str], port: int = 15650) -> ContainerSpec:
@@ -35,7 +35,7 @@ def test_reconcile_adopts_labeled_and_ignores_unlabeled(
 
     asyncio.run(seed())
     app = create_app(settings, docker=fake_docker, poll_interval=0.05)
-    with TestClient(app) as client:
+    with admin_client(app, settings) as client:
         worlds = client.get("/api/worlds").json()
         assert [w["slug"] for w in worlds] == ["orphan"]
         w = client.get("/api/worlds/orphan").json()
@@ -50,7 +50,7 @@ def test_controller_restart_leaves_game_running_and_readopts(
     settings: Settings, fake_docker: FakeDockerAdapter
 ) -> None:
     app = create_app(settings, docker=fake_docker, poll_interval=0.05)
-    with TestClient(app) as client:
+    with admin_client(app, settings) as client:
         res = client.post("/api/worlds", json={"display_name": "Keep"})
         assert wait_job(client, res.json()["job_id"])["status"] == "succeeded"
         wid = res.json()["world"]["id"]
@@ -59,7 +59,7 @@ def test_controller_restart_leaves_game_running_and_readopts(
     assert ("stop", "flamekeeper-keep") not in fake_docker.calls
 
     app2 = create_app(settings, docker=fake_docker, poll_interval=0.05)
-    with TestClient(app2) as client:
+    with admin_client(app2, settings) as client:
         assert wait_for(lambda: client.get(f"/api/worlds/{wid}").json()["state"] == "online")
 
 

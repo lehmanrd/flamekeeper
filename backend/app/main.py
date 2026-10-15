@@ -8,10 +8,11 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from app.api import auth as auth_api
 from app.api import backups as backups_api
 from app.api import config as config_api
 from app.api import jobs as jobs_api
@@ -20,7 +21,7 @@ from app.api import system as system_api
 from app.api import updates as updates_api
 from app.api import worlds as worlds_api
 from app.api.deps import current_user
-from app.api.errors import install_error_handlers
+from app.api.errors import install_error_handlers, problem
 from app.config import APP_NAME, Settings, get_settings
 from app.db import init_engine, run_migrations
 from app.logging_setup import setup_logging
@@ -52,6 +53,8 @@ async def _join_game_network(services: Services) -> None:
 
 async def startup(services: Services) -> None:
     services.jobs.recover_interrupted()
+    services.auth.ensure_setup_code()
+    services.notifier.load()
     services.selfcheck = await run_selfcheck(services.settings, services.docker)
     for check in services.selfcheck.checks:
         level = logging.ERROR if check.status == "fail" else logging.INFO
@@ -64,6 +67,7 @@ async def startup(services: Services) -> None:
     await services.worlds.reconcile()
     services.monitor.start()
     services.scheduler.start()
+    services.notifier.start()
 
 
 def create_app(
@@ -99,6 +103,7 @@ def create_app(
         finally:
             # Game containers keep running: the controller only stops its own tasks.
             await services.scheduler.stop()
+            await services.notifier.stop()
             await services.monitor.stop()
             await services.jobs.shutdown()
 
@@ -106,13 +111,34 @@ def create_app(
                   openapi_url=f"{settings.base_path}/api/openapi.json")
     install_error_handlers(app)
 
+    _require_csrf_header(app, settings)
     api = APIRouter(prefix=f"{settings.base_path}/api", dependencies=[Depends(current_user)])
     for module in (system_api, worlds_api, config_api, backups_api, updates_api, jobs_api,
                    stream_api):
         api.include_router(module.router)
     app.include_router(api)
+    # Sign-in and first setup work without a session.
+    app.include_router(auth_api.router, prefix=f"{settings.base_path}/api")
     _mount_spa(app, settings)
     return app
+
+
+CSRF_HEADER = "x-flamekeeper"
+SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
+
+
+def _require_csrf_header(app: FastAPI, settings: Settings) -> None:
+    """Changes need the X-FlameKeeper header, which a cross-site form or link can't send
+    (and a cross-site script can't add without a CORS preflight FlameKeeper never allows).
+    With the SameSite=Lax session cookie, this stops other sites acting as the admin."""
+    prefix = f"{settings.base_path}/api/"
+
+    @app.middleware("http")
+    async def _csrf(request: Request, call_next):  # noqa: ANN001, ANN202
+        if request.method not in SAFE_METHODS and request.url.path.startswith(prefix) \
+                and CSRF_HEADER not in request.headers:
+            return problem(403, "Missing X-FlameKeeper header", request)
+        return await call_next(request)
 
 
 def _mount_spa(app: FastAPI, settings: Settings) -> None:

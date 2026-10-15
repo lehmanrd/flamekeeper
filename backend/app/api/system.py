@@ -9,12 +9,14 @@ import shutil
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from pydantic import BaseModel
 
 from app.api.deps import get_services
 from app.config import APP_NAME
 from app.services.app_settings import SettingsError
 from app.services.capacity import capacity
 from app.services.container import Services
+from app.services.notifications import NotificationError
 from app.services.selfcheck import run_selfcheck
 from app.services.server_readme import README_NAME, compare, parse_readme
 from app.services.settings_schema import load_schema, schema_bytes
@@ -109,6 +111,39 @@ async def system_capacity(
     """Host resources vs Keen's guidance for the current worlds (+ `extra` planned)."""
     return capacity(services.settings.data_dir, len(services.worlds.list()), extra,
                     new_downloads=extra)
+
+
+class NotificationSettings(BaseModel):
+    discord_webhook: str | None = None  # None keeps the saved one; "" removes it
+    events: list[str] | None = None
+
+
+class NotificationTest(BaseModel):
+    discord_webhook: str | None = None  # test a URL before saving it
+
+
+@router.get("/settings/notifications")
+async def get_notifications(services: Services = Depends(get_services)) -> dict:
+    return services.notifier.view()
+
+
+@router.put("/settings/notifications")
+async def put_notifications(body: NotificationSettings,
+                            services: Services = Depends(get_services)) -> dict:
+    try:
+        return services.notifier.update(discord_webhook=body.discord_webhook,
+                                        events=body.events)
+    except NotificationError as e:
+        raise HTTPException(422, str(e)) from e
+
+
+@router.post("/settings/notifications/test", status_code=204)
+async def test_notifications(body: NotificationTest,
+                             services: Services = Depends(get_services)) -> None:
+    try:
+        await services.notifier.test(body.discord_webhook)
+    except NotificationError as e:
+        raise HTTPException(422, str(e)) from e
 
 
 @router.get("/settings/app")
