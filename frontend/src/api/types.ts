@@ -474,6 +474,8 @@ export interface HostInfo {
 
 export interface AuthStatus {
   setup_required: boolean;
+  /** No admin yet, and the browser's setup window (after FlameKeeper starts) has passed. */
+  setup_locked: boolean;
   user: { username: string } | null;
 }
 

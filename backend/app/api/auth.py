@@ -13,7 +13,6 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 class SetupBody(BaseModel):
-    setup_code: str
     username: str
     password: str
 
@@ -50,7 +49,9 @@ def _client(request: Request) -> str:
 @router.get("/status")
 async def status(request: Request, services: Services = Depends(get_services)) -> dict:
     user = services.auth.session_user(request.cookies.get(COOKIE_NAME))
-    return {"setup_required": services.auth.setup_required(),
+    required = services.auth.setup_required()
+    return {"setup_required": required,
+            "setup_locked": required and not services.auth.setup_open(),
             "user": {"username": user.username} if user else None}
 
 
@@ -58,7 +59,7 @@ async def status(request: Request, services: Services = Depends(get_services)) -
 async def setup(body: SetupBody, request: Request, response: Response,
                 services: Services = Depends(get_services)) -> dict:
     try:
-        user = services.auth.create_admin(body.setup_code, body.username, body.password)
+        user = services.auth.create_admin(body.username, body.password)
     except AuthError as e:
         raise _raise(e) from e
     _set_cookie(response, request, services.auth.start_session(user), services)

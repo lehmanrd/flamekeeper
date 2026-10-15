@@ -26,18 +26,19 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }, [refetch]);
   const signedIn = (username: string) => {
     qc.removeQueries({ predicate: (q) => q.queryKey[0] !== "auth" });
-    qc.setQueryData(["auth"], { setup_required: false, user: { username } });
+    qc.setQueryData(["auth"], { setup_required: false, setup_locked: false, user: { username } });
   };
   const signOut = useMutation({
     mutationFn: api.logout,
     onSettled: () => {
       qc.removeQueries({ predicate: (q) => q.queryKey[0] !== "auth" });
-      qc.setQueryData(["auth"], { setup_required: false, user: null });
+      qc.setQueryData(["auth"], { setup_required: false, setup_locked: false, user: null });
     },
   });
 
   if (error) return <AuthPage title="FlameKeeper"><p className="error-text">Can't reach FlameKeeper: {(error as Error).message}</p></AuthPage>;
   if (!data) return <AuthPage title="FlameKeeper"><p className="muted">Loading…</p></AuthPage>;
+  if (data.setup_required && data.setup_locked) return <SetupLocked onRetry={() => refetch()} />;
   if (data.setup_required) return <Setup onDone={signedIn} />;
   if (!data.user) return <Login onDone={signedIn} />;
   return (
@@ -64,18 +65,39 @@ function AuthPage({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
+function SetupLocked({ onRetry }: { onRetry: () => void }) {
+  return (
+    <AuthPage title="Setup is locked">
+      <p style={{ marginTop: 0 }}>
+        Nobody created the admin account within 10 minutes of FlameKeeper starting, so setup from the browser is
+        locked. That keeps an unclaimed install from being taken over by whoever finds it.
+      </p>
+      <p>On the server, either:</p>
+      <ul>
+        <li>
+          create the account in the terminal: <span className="mono">sudo flamekeeper reset-admin</span>, or
+        </li>
+        <li>
+          restart FlameKeeper with <span className="mono">sudo flamekeeper restart</span>, then reload this page within
+          10 minutes.
+        </li>
+      </ul>
+      <button className="btn" onClick={onRetry}>Check again</button>
+    </AuthPage>
+  );
+}
+
 function Setup({ onDone }: { onDone: (username: string) => void }) {
-  const [code, setCode] = useState("");
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const setup = useMutation({
-    mutationFn: () => api.setup({ setup_code: code, username, password }),
+    mutationFn: () => api.setup({ username, password }),
     onSuccess: (r) => onDone(r.user.username),
   });
   const mismatch = confirm.length > 0 && confirm !== password;
   const short = password.length > 0 && password.length < MIN_PASSWORD;
-  const ready = code.trim() && username.trim() && password.length >= MIN_PASSWORD && confirm === password;
+  const ready = username.trim() && password.length >= MIN_PASSWORD && confirm === password;
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (ready) setup.mutate();
@@ -83,14 +105,11 @@ function Setup({ onDone }: { onDone: (username: string) => void }) {
   return (
     <AuthPage title="Create the admin account">
       <p className="muted" style={{ marginTop: 0 }}>
-        Welcome! Set up the account you'll sign in with. The setup code proves you have access to the server: the
-        installer printed it, or run <span className="mono">flamekeeper setup-code</span> on the server.
+        Welcome! Choose the username and password you'll sign in with.
       </p>
       <form className="auth-form" onSubmit={submit}>
-        <label htmlFor="a-code">Setup code</label>
-        <input id="a-code" className="mono" autoFocus autoComplete="off" placeholder="XXXX-XXXX" value={code} onChange={(e) => setCode(e.target.value)} />
         <label htmlFor="a-user">Username</label>
-        <input id="a-user" autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} />
+        <input id="a-user" autoFocus autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} />
         <label htmlFor="a-pass">Password</label>
         <input id="a-pass" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} aria-invalid={short} />
         {short && <span className="field-error">At least {MIN_PASSWORD} characters.</span>}
@@ -130,8 +149,8 @@ function Login({ onDone }: { onDone: (username: string) => void }) {
         </button>
       </form>
       <p className="muted small" style={{ marginBottom: 0 }}>
-        Forgot the password? Run <span className="mono">sudo flamekeeper reset-admin</span> on the server, then set up
-        a new account.
+        Forgot the password? Run <span className="mono">sudo flamekeeper reset-admin</span> on the server to set a new
+        one.
       </p>
     </AuthPage>
   );

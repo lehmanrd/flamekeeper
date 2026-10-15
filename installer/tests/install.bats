@@ -20,8 +20,9 @@ os_release() {
 
 @test "parse_args accepts every option" {
   parse_args --yes --version v1.2.3 --data-dir /data --port 9000 --bind 127.0.0.1 \
-    --image my/img:dev --no-docker-install --no-firewall
+    --image my/img:dev --no-docker-install --no-firewall --admin-user keeper
   [ "$OPT_YES" = 1 ]
+  [ "$OPT_ADMIN_USER" = keeper ]
   [ "$OPT_VERSION" = 1.2.3 ]
   [ "$OPT_DATA_DIR" = /data ]
   [ "$OPT_PORT" = 9000 ]

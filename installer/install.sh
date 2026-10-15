@@ -15,6 +15,8 @@
 #   --no-docker-install   Fail instead of installing Docker
 #   --no-firewall         Don't touch ufw/firewalld
 #   --image <ref>         Use this controller image instead (development)
+#   --admin-user <name>   Admin username (default admin). The installer asks for the
+#                         password; for unattended installs, set FLAMEKEEPER_ADMIN_PASSWORD.
 #
 # Everything runs inside main(), called on the last line, so a partially downloaded
 # script never runs.
@@ -65,6 +67,8 @@ OPT_BIND=""
 OPT_IMAGE=""
 OPT_NO_DOCKER_INSTALL=0
 OPT_NO_FIREWALL=0
+OPT_ADMIN_USER="admin"
+ADMIN_READY=0
 
 usage() {
   sed -n '2,20p' "${BASH_SOURCE[0]:-/dev/null}" 2>/dev/null | sed 's/^# \{0,1\}//' ||
@@ -82,6 +86,7 @@ parse_args() {
       --image) OPT_IMAGE="${2:?--image needs a value}"; shift ;;
       --no-docker-install) OPT_NO_DOCKER_INSTALL=1 ;;
       --no-firewall) OPT_NO_FIREWALL=1 ;;
+      --admin-user) OPT_ADMIN_USER="${2:?--admin-user needs a value}"; shift ;;
       -h | --help) usage; exit 0 ;;
       *) die "Unknown option: $1 (see --help)" ;;
     esac
@@ -517,6 +522,55 @@ start_controller() {
   ok "FlameKeeper is up"
 }
 
+# The admin account: asked for here, in the terminal, so a fresh install is never left
+# unclaimed in the browser. Skipped when it already exists (upgrades).
+fk_cli() { docker_cmd exec -i flamekeeper python -m app.cli "$@"; }
+
+set_admin() {
+  local user="$1" password="$2"
+  printf '%s\n' "$password" | fk_cli set-admin "$user"
+}
+
+create_admin() {
+  if fk_cli admin-exists </dev/null; then
+    ADMIN_READY=1
+    return 0
+  fi
+  step "Admin account"
+  if [[ -n "${FLAMEKEEPER_ADMIN_PASSWORD:-}" ]]; then
+    set_admin "$OPT_ADMIN_USER" "$FLAMEKEEPER_ADMIN_PASSWORD" >/dev/null ||
+      die "Couldn't create the admin account (see the message above)"
+    ok "Created admin account '$OPT_ADMIN_USER'"
+    ADMIN_READY=1
+    return 0
+  fi
+  if [[ "$OPT_YES" == 1 ]] || ! { : </dev/tty; } 2>/dev/null; then
+    info "No terminal to ask for a password: create the account in the browser instead."
+    return 0
+  fi
+  info "Choose the username and password you'll sign in to FlameKeeper with."
+  local user password confirm
+  while true; do
+    printf '    Username [%s]: ' "$OPT_ADMIN_USER" >/dev/tty
+    read -r user </dev/tty || user=""
+    user="${user:-$OPT_ADMIN_USER}"
+    printf '    Password (at least 8 characters): ' >/dev/tty
+    read -rs password </dev/tty || password=""
+    printf '\n    Password again: ' >/dev/tty
+    read -rs confirm </dev/tty || confirm=""
+    printf '\n' >/dev/tty
+    if [[ "$password" != "$confirm" ]]; then
+      warn "The passwords don't match. Try again."
+    elif [[ ${#password} -lt 8 ]]; then
+      warn "Use at least 8 characters. Try again."
+    elif set_admin "$user" "$password" >/dev/null; then
+      ok "Created admin account '$user'"
+      ADMIN_READY=1
+      return 0
+    fi
+  done
+}
+
 summary() {
   local host
   host="$(primary_ip)"
@@ -525,12 +579,9 @@ summary() {
   printf '    Open  %shttp://%s:%s%s/%s\n' "$C_BOLD" "$host" "$FK_PORT" "${FK_BASE_PATH%/}" "$C_RESET"
   printf '    Data  %s\n' "$FK_DATA_DIR"
   printf '    Manage with: flamekeeper status | logs | update | doctor | uninstall\n\n'
-  # First install (or after reset-admin): the code that creates the admin account.
-  local code
-  code="$(docker_cmd exec flamekeeper python -m app.cli setup-code 2>/dev/null || true)"
-  if [[ "$code" =~ ^[A-Z0-9]{4}-[A-Z0-9]{4}$ ]]; then
-    printf '    %sSetup code  %s%s  (create the admin account with it; run: flamekeeper setup-code to see it again)\n\n' \
-      "$C_BOLD" "$code" "$C_RESET"
+  if [[ "$ADMIN_READY" != 1 ]]; then
+    printf '    %sOpen it within 10 minutes to create the admin account%s (or run:\n' "$C_BOLD" "$C_RESET"
+    printf '    sudo flamekeeper reset-admin). After that, setup from the browser locks.\n\n'
   fi
   if [[ "$FK_BIND" == "0.0.0.0" ]]; then
     printf '    %sNote:%s the web UI uses plain HTTP. On an untrusted network, re-run with\n' "$C_YEL" "$C_RESET"
@@ -550,6 +601,7 @@ main() {
   write_files
   configure_firewall
   start_controller
+  create_admin
   summary
 }
 

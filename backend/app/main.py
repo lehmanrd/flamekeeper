@@ -53,7 +53,7 @@ async def _join_game_network(services: Services) -> None:
 
 async def startup(services: Services) -> None:
     services.jobs.recover_interrupted()
-    services.auth.ensure_setup_code()
+    services.auth.log_setup_hint()
     services.notifier.load()
     services.selfcheck = await run_selfcheck(services.settings, services.docker)
     for check in services.selfcheck.checks:

@@ -56,14 +56,10 @@ def anon(settings: Settings, fake_docker: FakeDockerAdapter) -> Iterator[TestCli
         yield c
 
 
-def setup_code(settings: Settings) -> str:
-    return (settings.data_dir / "setup-code").read_text().strip()
-
-
 def sign_in(c: TestClient, settings: Settings) -> TestClient:
     """Create the admin through first setup, or sign in if it already exists."""
     if c.get("/api/auth/status").json()["setup_required"]:
-        res = c.post("/api/auth/setup", json={"setup_code": setup_code(settings), **ADMIN})
+        res = c.post("/api/auth/setup", json=ADMIN)
     else:
         res = c.post("/api/auth/login", json=ADMIN)
     assert res.status_code == 200, res.text

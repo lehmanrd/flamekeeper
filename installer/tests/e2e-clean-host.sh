@@ -36,27 +36,26 @@ on_host "curl -fsSL file:///home/gamer/install.sh | bash -s -- --yes --no-firewa
 on_host 'docker --version; sudo docker compose version'
 docker save "$image" | docker exec -i "$name" docker load -q
 
-echo "== run 2: install with the local image"
-on_host "curl -fsSL file:///home/gamer/install.sh | bash -s -- --yes --no-firewall --image $image --port 8088"
+echo "== run 2: install with the local image (--yes: no admin prompt)"
+out="$(on_host "curl -fsSL file:///home/gamer/install.sh | bash -s -- --yes --no-firewall --image $image --port 8088")"
+printf '%s\n' "$out" | tail -12
+grep -q "within 10 minutes to create the admin account" <<<"$out" || { echo "missing setup hint"; exit 1; }
 on_host 'sudo cat /opt/flamekeeper/.env'
 on_host 'curl -fsS localhost:8088/api/health; echo'
 
-echo "== run 3: re-run keeps settings (port 8088 without --port)"
-on_host "curl -fsSL file:///home/gamer/install.sh | bash -s -- --yes --no-firewall --image $image" >/dev/null
+echo "== run 3: re-run keeps settings (port 8088 without --port), creates the admin unattended"
+on_host "curl -fsSL file:///home/gamer/install.sh | FLAMEKEEPER_ADMIN_PASSWORD=e2e-password bash -s -- --yes --no-firewall --image $image --admin-user keeper" | grep "admin account"
 on_host 'sudo grep FLAMEKEEPER_PORT /opt/flamekeeper/.env'
 on_host 'curl -fsS localhost:8088/api/health >/dev/null && echo "   health ok on 8088"'
 
 echo "== CLI"
 on_host 'flamekeeper status'
 on_host 'flamekeeper doctor'
-code="$(on_host 'flamekeeper setup-code')"
-[[ "$code" =~ ^[A-Z0-9]{4}-[A-Z0-9]{4}$ ]] || { echo "unexpected setup code: $code"; exit 1; }
-echo "   setup code $code"
 on_host "curl -fsS -H 'X-FlameKeeper: 1' -H 'Content-Type: application/json' \
-  -d '{\"setup_code\": \"$code\", \"username\": \"admin\", \"password\": \"e2e-password\"}' \
-  localhost:8088/api/auth/setup; echo"
-on_host 'flamekeeper setup-code' && { echo "unexpected: setup code after setup"; exit 1; } \
-  || echo "   setup done; no setup code any more"
+  -d '{\"username\": \"keeper\", \"password\": \"e2e-password\"}' localhost:8088/api/auth/login; echo"
+on_host "curl -fsSL file:///home/gamer/install.sh | bash -s -- --yes --no-firewall --image $image" \
+  | grep -q "within 10 minutes" && { echo "unexpected: setup hint after the admin exists"; exit 1; }
+echo "   upgrade with an admin: no setup hint"
 on_host 'sudo flamekeeper uninstall'
 on_host 'test ! -e /opt/flamekeeper && test ! -e /usr/local/bin/flamekeeper && sudo test -d /srv/flamekeeper && echo "   uninstall removed controller, kept data"'
 echo "== PASS"

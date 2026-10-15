@@ -1,9 +1,10 @@
-"""Admin login: password hashing, the first-setup code, sessions and login throttling.
+"""Admin login: password hashing, the admin account, sessions and login throttling.
 
-v1 has a single admin account. Until it exists, FlameKeeper is in setup mode: the only
-thing the UI can do is create the account, and that needs a one-time setup code written
-to `<data dir>/setup-code` (and logged). The code proves the person setting it up can
-see the host, so nobody else on the network can claim the install first.
+v1 has a single admin account. The installer creates it from the terminal (see
+app.cli set-admin), so a fresh install is never left unclaimed. Without the installer,
+the first visitor can create it in the browser, but only within SETUP_WINDOW_S of the
+controller starting: an install nobody set up doesn't stay open to whoever finds it
+(e.g. a bot scanning a rented server). After that, restart FlameKeeper or use the CLI.
 """
 
 from __future__ import annotations
@@ -34,8 +35,7 @@ USERNAME_RE = re.compile(r"^[A-Za-z0-9_.@-]{1,64}$")
 # Login throttling, per client address: this many failures within the window, then wait.
 MAX_FAILURES = 5
 FAILURE_WINDOW_S = 300.0
-# No 0/O/1/I/L: the code is read off a terminal and typed into a browser.
-CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+SETUP_WINDOW_S = 600.0
 _SCRYPT = {"n": 2**14, "r": 8, "p": 1}
 
 
@@ -89,7 +89,8 @@ class CurrentUser:
 
 class AuthService:
     def __init__(self, data_dir: Path) -> None:
-        self.code_file = data_dir / "setup-code"
+        self.data_dir = data_dir
+        self.started = time.monotonic()
         self._failures: dict[str, list[float]] = {}
 
     # -- setup ----------------------------------------------------------------------
@@ -98,64 +99,55 @@ class AuthService:
         with session_scope() as s:
             return not s.scalar(select(func.count()).select_from(User))
 
-    def ensure_setup_code(self) -> str | None:
-        """In setup mode, make sure a setup code exists and log it. Returns the code."""
-        if not self.setup_required():
-            self.code_file.unlink(missing_ok=True)
-            return None
-        code = self._read_code()
-        if code is None:
-            code = self.new_setup_code()
-        log.warning("FIRST SETUP: open FlameKeeper in a browser and create the admin "
-                    "account with setup code %s", code)
-        return code
+    def setup_open(self) -> bool:
+        """True while the browser may create the admin (no account yet, recent start)."""
+        return self.setup_required() and time.monotonic() - self.started < SETUP_WINDOW_S
 
-    def new_setup_code(self) -> str:
-        raw = "".join(secrets.choice(CODE_ALPHABET) for _ in range(8))
-        code = f"{raw[:4]}-{raw[4:]}"
-        self.code_file.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.code_file.with_suffix(".tmp")
-        tmp.write_text(code + "\n")
-        tmp.chmod(0o600)
-        tmp.replace(self.code_file)
-        return code
+    def log_setup_hint(self) -> None:
+        # Installs from 0.2.0 kept a setup code here; it's no longer used.
+        (self.data_dir / "setup-code").unlink(missing_ok=True)
+        if self.setup_required():
+            log.warning("FIRST SETUP: no admin account yet. Open FlameKeeper in a browser "
+                        "within %d minutes to create it, or run: flamekeeper reset-admin",
+                        SETUP_WINDOW_S // 60)
 
-    def _read_code(self) -> str | None:
-        try:
-            code = self.code_file.read_text().strip()
-        except FileNotFoundError:
-            return None
-        return code or None
-
-    def create_admin(self, setup_code: str, username: str, password: str) -> CurrentUser:
+    def create_admin(self, username: str, password: str) -> CurrentUser:
+        """First setup in the browser."""
         if not self.setup_required():
             raise AuthError("FlameKeeper is already set up. Sign in instead.", 409)
-        expected = self._read_code()
-        given = setup_code.strip().upper().replace(" ", "")
-        if len(given) == 8:
-            given = f"{given[:4]}-{given[4:]}"
-        if expected is None or not hmac.compare_digest(given, expected):
-            raise AuthError("That setup code isn't right. Run `flamekeeper setup-code` on "
-                            "the server to see it.", 403)
+        if not self.setup_open():
+            raise AuthError("Setup is locked because nobody created the admin account within "
+                            f"{int(SETUP_WINDOW_S // 60)} minutes of FlameKeeper starting. Run "
+                            "`sudo flamekeeper restart` and reload this page, or create the "
+                            "account with `sudo flamekeeper reset-admin`.", 403)
+        return self._add_admin(username, password)
+
+    def set_admin(self, username: str, password: str) -> CurrentUser:
+        """From the terminal (installer, reset-admin): replace any admin account and sign
+        everyone out."""
+        self._check(username, password)
+        with session_scope() as s:
+            s.execute(delete(AuthSession))
+            s.execute(delete(User))
+        return self._add_admin(username, password)
+
+    @staticmethod
+    def _check(username: str, password: str) -> str:
         username = username.strip()
         if not USERNAME_RE.match(username):
             raise AuthError("Username: letters, digits and . _ @ - (up to 64).", 422)
         check_password(password)
+        return username
+
+    def _add_admin(self, username: str, password: str) -> CurrentUser:
+        username = self._check(username, password)
         with session_scope() as s:
             user = User(username=username, password_hash=hash_password(password))
             s.add(user)
             s.flush()
             out = CurrentUser(user.id, user.username)
-        self.code_file.unlink(missing_ok=True)
         log.info("admin account %r created", username)
         return out
-
-    def reset(self) -> str:
-        """Remove every account and session (forgotten password); back to setup mode."""
-        with session_scope() as s:
-            s.execute(delete(AuthSession))
-            s.execute(delete(User))
-        return self.new_setup_code()
 
     # -- login ----------------------------------------------------------------------
 

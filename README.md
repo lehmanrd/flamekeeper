@@ -36,7 +36,8 @@ What the installer does, in order:
    16 GB RAM, 6 CPU cores, 30 GB disk.
 4. Writes `/opt/flamekeeper/docker-compose.yml` and `.env`, creates `/srv/flamekeeper`.
 5. Offers to open the UI port and game ports (UDP 15637–15646) in ufw or firewalld.
-6. Starts FlameKeeper, waits until its self-check passes, and prints the URL.
+6. Starts FlameKeeper and waits until its self-check passes.
+7. Asks for the admin username and password, then prints the URL.
 
 It never runs anything until fully downloaded. Re-running it upgrades in place and keeps
 your settings. Options go after `bash -s --`:
@@ -53,6 +54,7 @@ curl -fsSL …/install.sh | bash -s -- --yes --port 8090 --data-dir /mnt/games -
 | `--port N` / `--bind IP` | Web UI port and address (default `0.0.0.0:8080`) |
 | `--no-docker-install` | Fail instead of installing Docker |
 | `--no-firewall` | Leave ufw/firewalld alone |
+| `--admin-user NAME` | Admin username (default `admin`); with `FLAMEKEEPER_ADMIN_PASSWORD` set, no password prompt |
 
 Prefer to read it first? Download `install.sh` and `install.sh.sha256` from the
 [latest release](https://github.com/lehmanrd/flamekeeper/releases/latest), run
@@ -65,8 +67,7 @@ flamekeeper status            controller and game servers
 flamekeeper logs [-f]         controller logs
 flamekeeper update            upgrade to the latest release (keeps settings)
 flamekeeper doctor            check Docker, disk and the self-check
-flamekeeper setup-code        show the code for creating the admin account
-flamekeeper reset-admin       forgot the password: start over with a new admin account
+flamekeeper reset-admin       set the admin username and password (e.g. forgotten password)
 flamekeeper start|stop|restart
 flamekeeper uninstall [--purge]
 ```
@@ -84,12 +85,17 @@ checks this at startup and tells you if it's wrong.
 
 ## Signing in
 
-The first time you open FlameKeeper, it asks you to create the admin account. That needs
-the **setup code** the installer prints at the end (or run `flamekeeper setup-code`), so
-nobody else on your network can claim the install first. Sign-ins last 30 days.
+The installer asks for the admin username and password, so FlameKeeper is never left
+open for someone else to claim. For an unattended install, pass `--admin-user` and set
+`FLAMEKEEPER_ADMIN_PASSWORD`. Sign-ins last 30 days; change the password under Settings.
 
-Forgot the password? `sudo flamekeeper reset-admin` removes the account (game servers keep
-running) and prints a new setup code. You can change the password under Settings.
+Without the installer (or with `--yes` and no password set), the first visitor creates
+the account in the browser, but only within 10 minutes of FlameKeeper starting. After that,
+setup locks, so an install nobody finished doesn't stay open to whoever finds it. Restart
+FlameKeeper to reopen it, or create the account from the terminal.
+
+Forgot the password? `sudo flamekeeper reset-admin` sets a new username and password and
+signs everyone out. Game servers keep running.
 
 ## Notifications
 

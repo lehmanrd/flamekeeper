@@ -23,9 +23,8 @@ Usage: flamekeeper <command>
   update [--version v]
                       Upgrade FlameKeeper (re-runs the installer, keeps settings)
   doctor              Check Docker, ports, disk and the controller's self-check
-  setup-code          Show the code for creating the admin account (first setup)
-  reset-admin         Forgot the password: remove the admin account and sign everyone
-                      out, then show a new setup code
+  reset-admin         Set the admin username and password (first setup, or a forgotten
+                      password). Signs everyone out.
   uninstall [--purge] Remove the controller. --purge also deletes all game servers,
                       saves and backups.
   version             Show the installed version
@@ -162,10 +161,18 @@ cmd_uninstall() {
 
 cmd_reset_admin() {
   need_install
-  local answer
-  read -r -p "Remove the admin account and sign everyone out? Game servers keep running. [y/N] " answer </dev/tty || answer=""
-  [[ "$answer" =~ ^[Yy]$ ]] || die "cancelled"
-  dk exec flamekeeper python -m app.cli reset-admin
+  { : </dev/tty; } 2>/dev/null || die "reset-admin needs a terminal"
+  local user password confirm
+  echo "Set the FlameKeeper admin account. This replaces any existing one and signs"
+  echo "everyone out; game servers keep running."
+  read -r -p "Username [admin]: " user </dev/tty || user=""
+  user="${user:-admin}"
+  read -rs -p "New password (at least 8 characters): " password </dev/tty || password=""
+  echo
+  read -rs -p "New password again: " confirm </dev/tty || confirm=""
+  echo
+  [[ "$password" == "$confirm" ]] || die "the passwords don't match"
+  printf '%s\n' "$password" | dk exec -i flamekeeper python -m app.cli set-admin "$user"
 }
 
 main() {
@@ -179,7 +186,6 @@ main() {
     restart) compose up -d --force-recreate ;;
     update) cmd_update "$@" ;;
     doctor) cmd_doctor ;;
-    setup-code) dk exec flamekeeper python -m app.cli setup-code ;;
     reset-admin) cmd_reset_admin ;;
     uninstall) cmd_uninstall "$@" ;;
     version) env_get FLAMEKEEPER_IMAGE | sed 's/.*://' ;;

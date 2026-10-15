@@ -97,7 +97,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 export const api = {
   authStatus: () => request<AuthStatus>("GET", "/auth/status"),
-  setup: (body: { setup_code: string; username: string; password: string }) =>
+  setup: (body: { username: string; password: string }) =>
     request<{ user: { username: string } }>("POST", "/auth/setup", body),
   login: (username: string, password: string) =>
     request<{ user: { username: string } }>("POST", "/auth/login", { username, password }),
