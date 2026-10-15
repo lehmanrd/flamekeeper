@@ -385,7 +385,7 @@ class WorldService:
             return
         ctx.progress(20, "Starting server (first start downloads the game)")
         since = _now()
-        await self.docker.start(container_name(world.slug))
+        await self._start_container(container_name(world.slug))
         self._poke(world.id)
         self.events.record(world.id, "started")
         await self._wait_online(ctx, world, FIRST_BOOT_TIMEOUT_S, span=(20, 99), since=since)
@@ -475,6 +475,13 @@ class WorldService:
         await self.docker.create_container(spec)
         self._poke(world.id)
         ctx.log(f"Created container {name} (image {spec.image}, port {world.query_port}/udp)")
+
+    async def _start_container(self, name: str) -> None:
+        """Start a world's container. Its network is created first if it's missing (e.g.
+        deleted by hand): Docker accepts a container on a missing network but can't start it."""
+        if self.network:
+            await self.docker.ensure_network(self.network)
+        await self.docker.start(name)
 
     async def _wait_online(
         self,
@@ -646,7 +653,7 @@ class WorldService:
         if self.monitor:
             self.monitor.expect_restart(world.id)
         since = _now()
-        await self.docker.start(name)
+        await self._start_container(name)
         self._poke(world.id)
         self.events.record(world.id, "started")
         # The server reads enshrouded_server.json when it boots.
@@ -709,7 +716,7 @@ class WorldService:
                 ctx.progress(None, f"Stopping (up to {world.stop_timeout_s}s for a clean save)")
                 await self.docker.stop(name, world.stop_timeout_s)
                 self._apply_config(ctx, current)
-                await self.docker.start(name)
+                await self._start_container(name)
                 self._poke(world.id)
             self.events.record(world.id, "started", mode=mode)
             self._mark_applied(current)
@@ -736,7 +743,7 @@ class WorldService:
                 if self.monitor:
                     self.monitor.expect_restart(world.id)
                 since = _now()
-                await self.docker.start(name)
+                await self._start_container(name)
                 self._poke(world.id)
                 self.events.record(world.id, "started", mode="recreate")
                 self._mark_applied(current)

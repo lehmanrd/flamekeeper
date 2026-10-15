@@ -378,7 +378,9 @@ class RealDockerAdapter:
 
     async def ensure_network(self, name: str) -> None:
         def _do() -> None:
-            if not self.client.networks.list(names=[name]):
+            # Docker's name filter also matches partial names: "flamekeeper" finds the
+            # compose project's "flamekeeper_default". Only an exact match counts.
+            if not any(n.name == name for n in self.client.networks.list(names=[name])):
                 self.client.networks.create(name, driver="bridge", labels={LABEL_MANAGED: "true"})
 
         await self._run(_do)

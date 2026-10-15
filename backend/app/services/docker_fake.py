@@ -129,6 +129,11 @@ class FakeDockerAdapter:
     async def start(self, name_or_id: str) -> None:
         c = self._require(name_or_id)
         self.calls.append(("start", c.name))
+        network = self.specs[c.id].network if c.id in self.specs else None
+        if network and network not in self.networks:
+            # Like Docker: a container can be created on a missing network, not started.
+            raise DockerError(f"failed to set up container networking: network {network} "
+                              "not found")
         if c.status != "running":
             self._write_savegame(c)
             server = self._server_dir(c)

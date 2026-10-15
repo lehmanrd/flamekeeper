@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
 from app.config import Settings
-from app.services.docker_adapter import ContainerSpec
+from app.services.docker_adapter import ContainerSpec, RealDockerAdapter
 from app.services.docker_fake import FakeDockerAdapter
 from tests.conftest import wait_for, wait_job
 
@@ -155,6 +157,39 @@ def test_crash_is_detected(client: TestClient, fake_docker: FakeDockerAdapter) -
                     == "crashed")
     kinds = [e["kind"] for e in client.get(f"/api/worlds/{world['id']}/events").json()]
     assert "crashed" in kinds
+
+
+def test_start_recreates_a_missing_network(client: TestClient,
+                                         fake_docker: FakeDockerAdapter) -> None:
+    """A world created stopped, whose network was removed before its first start."""
+    world = _create(client, start=False)
+    fake_docker.networks.discard("flamekeeper")
+    job = wait_job(client, client.post(f"/api/worlds/{world['id']}/start").json()["job_id"])
+    assert job["status"] == "succeeded", job
+    assert "flamekeeper" in fake_docker.networks
+
+
+def test_network_lookup_ignores_partial_name_matches() -> None:
+    """Docker's name filter matches partial names, so the compose project's
+    "flamekeeper_default" network must not count as "flamekeeper"."""
+    created: list[str] = []
+
+    class Net:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+    class Networks:
+        def list(self, names: list[str]) -> list[Net]:
+            return [Net("flamekeeper_default")]
+
+        def create(self, name: str, **kwargs) -> None:
+            created.append(name)
+
+    adapter = object.__new__(RealDockerAdapter)
+    adapter.client = SimpleNamespace(networks=Networks())
+    adapter._docker = SimpleNamespace(errors=SimpleNamespace(APIError=RuntimeError))
+    asyncio.run(adapter.ensure_network("flamekeeper"))
+    assert created == ["flamekeeper"]
 
 
 def test_missing_container_and_recreate(client: TestClient, fake_docker: FakeDockerAdapter) -> None:
