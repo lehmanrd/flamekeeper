@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from app.config import Settings
 from app.services.app_settings import AppSettings
+from app.services.app_update import AppUpdater
 from app.services.auth import AuthService
 from app.services.backup_service import BackupService
 from app.services.bus import Bus
@@ -39,6 +40,7 @@ class Services:
     app_settings: AppSettings
     auth: AuthService
     notifier: Notifier
+    app_update: AppUpdater
     selfcheck: SelfCheckResult | None = None
 
     @classmethod
@@ -75,5 +77,7 @@ class Services:
         notifier = Notifier(world_name)
         events.listeners.append(notifier.on_event)
         jobs.listeners.append(notifier.on_job)
+        app_update = AppUpdater(settings, docker, notifier,
+                                **({"poll_s": poll_interval} if poll_interval else {}))
         return cls(settings, docker, bus, jobs, events, config, worlds, monitor, backups,
-                   scheduler, updates, metrics, app_settings, auth, notifier)
+                   scheduler, updates, metrics, app_settings, auth, notifier, app_update)

@@ -23,9 +23,11 @@ COPY backend/ ./
 COPY --from=ui /ui/dist ./app/static
 
 ARG VERSION=dev
+ARG REPO=lehmanrd/flamekeeper
 ENV PATH="/app/.venv/bin:$PATH" \
     DATA_DIR=/srv/flamekeeper \
-    FLAMEKEEPER_VERSION=$VERSION
+    FLAMEKEEPER_VERSION=$VERSION \
+    FLAMEKEEPER_REPO=$REPO
 LABEL org.opencontainers.image.title="FlameKeeper" \
       org.opencontainers.image.description="Enshrouded dedicated server manager" \
       org.opencontainers.image.version=$VERSION

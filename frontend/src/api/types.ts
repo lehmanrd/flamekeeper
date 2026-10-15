@@ -479,6 +479,29 @@ export interface AuthStatus {
   user: { username: string } | null;
 }
 
+/** FlameKeeper's own updates (GET /api/system/update). */
+export interface AppUpdateStatus {
+  current: string;
+  latest: { version: string; name: string; url: string | null; published_at: string | null } | null;
+  update_available: boolean;
+  checked_at: string | null;
+  check_error: string | null;
+  checks_enabled: boolean;
+  can_update: boolean;
+  cannot_update_reason: string | null;
+  /** What to run on the server instead, e.g. "sudo flamekeeper update". */
+  command: string;
+  run: {
+    status: "running" | "succeeded" | "failed";
+    from: string;
+    to: string;
+    started_at: string;
+    finished_at: string | null;
+    error: string | null;
+    log_tail: string | null;
+  } | null;
+}
+
 export interface NotificationSettings {
   discord_configured: boolean;
   /** Masked: the webhook's id with its token hidden. */

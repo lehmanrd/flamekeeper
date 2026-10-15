@@ -192,3 +192,36 @@ EOF
   run bash "$ROOT/installer/flamekeeper" frobnicate
   [ "$status" -eq 2 ]
 }
+
+@test "write_files tells the controller where the flamekeeper command is" {
+  FK_BIN_DIR="$TMP/bin" FK_DATA_DIR="$TMP/data" DOCKER_SOCK=/var/run/docker.sock
+  mkdir -p "$FK_BIN_DIR"
+  write_files >/dev/null
+  grep -qx "      - FLAMEKEEPER_CLI=$TMP/bin/flamekeeper" "$FK_INSTALL_DIR/docker-compose.yml"
+  ! grep -q "__FK_" "$FK_INSTALL_DIR/docker-compose.yml"
+  [ -x "$FK_BIN_DIR/flamekeeper" ]
+}
+
+@test "flamekeeper update passes --version and --no-firewall to the installer" {
+  sed -e 's#__FK_REPO__#someone/flamekeeper#' "$ROOT/installer/flamekeeper" >"$TMP/fk"
+  mkdir -p "$TMP/stub"
+  # A fake curl that "downloads" an installer printing its arguments.
+  cat >"$TMP/stub/curl" <<'STUB'
+#!/usr/bin/env bash
+while [[ $# -gt 0 ]]; do
+  case "$1" in -o) out="$2"; shift ;; https://*) echo "url=$1" >&2 ;; esac
+  shift
+done
+printf 'echo "installer args: $*"\n' >"$out"
+STUB
+  chmod +x "$TMP/stub/curl"
+  PATH="$TMP/stub:$PATH" run bash "$TMP/fk" update --version v0.5.0 --no-firewall
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"url=https://github.com/someone/flamekeeper/releases/download/v0.5.0/install.sh"* ]]
+  [[ "$output" == *"installer args: --yes --no-firewall --version 0.5.0"* ]]
+  PATH="$TMP/stub:$PATH" run bash "$TMP/fk" update
+  [[ "$output" == *"url=https://github.com/someone/flamekeeper/releases/latest/download/install.sh"* ]]
+  [[ "$output" == *"installer args: --yes" ]]
+  run bash "$TMP/fk" update --frob
+  [ "$status" -ne 0 ]
+}

@@ -58,6 +58,12 @@ class Settings(BaseSettings):
     steam_api_fallback: bool = False
     steamcmd_image: str = "steamcmd/steamcmd:latest"
     image_check_interval_hours: int = 24
+    # FlameKeeper's own releases (app.services.app_update). FLAMEKEEPER_VERSION is set in
+    # the image at build time; FLAMEKEEPER_CLI by the installer's compose file.
+    flamekeeper_version: str = "dev"
+    flamekeeper_repo: str = "lehmanrd/flamekeeper"
+    flamekeeper_cli: str = ""
+    check_for_app_updates: bool = True
     metrics_retention_days: int = 7
     # Skip the DATA_DIR path-match check (development only).
     skip_path_check: bool = False

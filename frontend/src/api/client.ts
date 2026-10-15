@@ -1,6 +1,7 @@
 import type { SettingsSchema } from "../settings/schema";
 import type {
   AppSettingsView,
+  AppUpdateStatus,
   AuthStatus,
   NotificationSettings,
   BackupDetail,
@@ -111,6 +112,9 @@ export const api = {
     request<void>("POST", "/settings/notifications/test", { discord_webhook }),
   system: () => request<SystemInfo>("GET", "/system"),
   rerunSelfcheck: () => request<unknown>("POST", "/system/selfcheck"),
+  appUpdate: () => request<AppUpdateStatus>("GET", "/system/update"),
+  checkAppUpdate: () => request<AppUpdateStatus>("POST", "/system/update/check"),
+  startAppUpdate: (version: string) => request<AppUpdateStatus>("POST", "/system/update", { version }),
   settingsReadme: () => request<SettingsReadmeReport>("GET", "/system/settings-readme"),
   settingsSchema: () => request<SettingsSchema>("GET", "/settings-schema"),
   worlds: () => request<WorldSummary[]>("GET", "/worlds"),

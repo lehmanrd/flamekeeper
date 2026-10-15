@@ -46,6 +46,17 @@ a { color: var(--gold2); }
 .nav a.active { background: var(--panel2); box-shadow: inset 3px 0 0 var(--gold); }
 .nav span.soon { color: var(--muted); opacity: .55; cursor: default; }
 .nav .ico { width: 18px; text-align: center; }
+/* "Update available" badge with a tooltip; it opens upward so the scrolling nav doesn't clip it. */
+.card-attention { border-color: var(--warn); }
+.nav-alert { margin-left: auto; position: relative; display: inline-grid; place-items: center;
+  width: 18px; height: 18px; border-radius: 50%; background: var(--warn); color: #1b1a14;
+  font-size: 12px; font-weight: 700; line-height: 1; }
+.nav-alert::after { content: attr(data-tip); position: absolute; right: -6px; bottom: calc(100% + 8px);
+  width: 176px; padding: 8px 10px; border-radius: 8px; background: var(--panel2); color: var(--text);
+  border: 1px solid var(--warn); font-size: 12px; font-weight: 400; line-height: 1.4; text-align: left;
+  box-shadow: 0 6px 18px rgba(0,0,0,.35); opacity: 0; pointer-events: none; transition: opacity .12s;
+  z-index: 10; white-space: normal; }
+.nav-alert:hover::after, .nav-alert:focus-visible::after, .nav a:hover .nav-alert::after { opacity: 1; }
 .navgroup { margin-top: 14px; padding: 0 10px 4px; font-size: 11px; text-transform: uppercase;
   letter-spacing: .1em; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .side .foot { margin-top: auto; font-size: 11px; color: var(--muted); padding: 10px; }

@@ -33,7 +33,9 @@ jobs:
           context: .
           platforms: linux/amd64
           push: true
-          build-args: VERSION=${{ steps.names.outputs.version }}
+          build-args: |
+            VERSION=${{ steps.names.outputs.version }}
+            REPO=${{ github.repository }}
           tags: |
             ${{ steps.names.outputs.image }}:${{ steps.names.outputs.version }}
             ${{ steps.names.outputs.image }}:latest

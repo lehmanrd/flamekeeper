@@ -20,7 +20,7 @@ Usage: flamekeeper <command>
   logs [-f]           Controller logs (-f to follow)
   start | stop | restart
                       Start/stop/restart the controller. Game servers keep running.
-  update [--version v]
+  update [--version v] [--no-firewall]
                       Upgrade FlameKeeper (re-runs the installer, keeps settings)
   doctor              Check Docker, ports, disk and the controller's self-check
   reset-admin         Set the admin username and password (first setup, or a forgotten
@@ -86,19 +86,21 @@ cmd_status() {
 }
 
 cmd_update() {
-  local args=(--yes) url
+  local args=(--yes) url version=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --version) args+=(--version "${2:?}"); shift ;;
+      --version) version="${2:?}"; shift ;;
+      --no-firewall) args+=(--no-firewall) ;;
       *) die "unknown option $1" ;;
     esac
     shift
   done
   [[ "$FK_REPO" == __*__ ]] && die "this is a development install; re-run installer/install.sh from your checkout"
   url="https://github.com/${FK_REPO}/releases/latest/download/install.sh"
-  if [[ "${args[*]}" == *--version* ]]; then
-    local v="${args[2]#v}"
-    url="https://github.com/${FK_REPO}/releases/download/v${v}/install.sh"
+  if [[ -n "$version" ]]; then
+    version="${version#v}"
+    args+=(--version "$version")
+    url="https://github.com/${FK_REPO}/releases/download/v${version}/install.sh"
   fi
   echo "Downloading $url"
   local tmp

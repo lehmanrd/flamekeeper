@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from app.api.deps import get_services
 from app.config import APP_NAME
 from app.services.app_settings import SettingsError
+from app.services.app_update import AppUpdateError
 from app.services.capacity import capacity
 from app.services.container import Services
 from app.services.notifications import NotificationError
@@ -48,7 +49,7 @@ async def system(services: Services = Depends(get_services)) -> dict:
     sc = services.selfcheck
     return {
         "app": APP_NAME,
-        "version": os.environ.get("FLAMEKEEPER_VERSION", "dev"),
+        "version": s.flamekeeper_version,
         "data_dir": str(s.data_dir),
         "base_path": s.base_path or "/",
         "in_container": s.in_container,
@@ -159,3 +160,26 @@ async def put_app_settings(
         return services.app_settings.update(body)
     except SettingsError as e:
         raise HTTPException(422, str(e)) from e
+
+
+class AppUpdateRequest(BaseModel):
+    version: str
+
+
+@router.get("/system/update")
+async def get_app_update(services: Services = Depends(get_services)) -> dict:
+    return services.app_update.status()
+
+
+@router.post("/system/update/check")
+async def check_app_update(services: Services = Depends(get_services)) -> dict:
+    return await services.app_update.check(manual=True)
+
+
+@router.post("/system/update", status_code=202)
+async def start_app_update(body: AppUpdateRequest,
+                           services: Services = Depends(get_services)) -> dict:
+    try:
+        return await services.app_update.start_update(body.version)
+    except AppUpdateError as e:
+        raise HTTPException(e.status, str(e)) from e

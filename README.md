@@ -66,6 +66,7 @@ Prefer to read it first? Download `install.sh` and `install.sh.sha256` from the
 flamekeeper status            controller and game servers
 flamekeeper logs [-f]         controller logs
 flamekeeper update            upgrade to the latest release (keeps settings)
+                              [--version X] [--no-firewall]
 flamekeeper doctor            check Docker, disk and the self-check
 flamekeeper reset-admin       set the admin username and password (e.g. forgotten password)
 flamekeeper start|stop|restart
@@ -82,6 +83,24 @@ Use [`docker-compose.example.yml`](docker-compose.example.yml). The one rule: mo
 directory at the **same path** inside and outside the container (`/srv/flamekeeper:/srv/flamekeeper`).
 FlameKeeper creates game containers through the host's Docker, which needs host paths. It
 checks this at startup and tells you if it's wrong.
+
+### Updating FlameKeeper
+
+FlameKeeper checks GitHub for a new release twice a day. When there is one, Settings in
+the sidebar gets a **!** badge, and **Settings → FlameKeeper updates** has an "Update to …"
+button. Updating takes about a minute: the web page is unavailable while FlameKeeper
+restarts, then reloads by itself. Game servers keep running and players stay connected.
+Settings, worlds and backups are kept. Discord gets a message when a release is out and
+when the update finishes (or fails).
+
+The button runs `flamekeeper update` on the server for you, so it's only offered on
+installs made with the installer; otherwise the card shows what to run. To do it from a
+terminal instead: `sudo flamekeeper update`. To stop the checks, turn off "Check GitHub
+for new FlameKeeper releases" under Settings → Defaults & checks.
+
+How it works: a container can't replace itself, so FlameKeeper starts a short-lived helper
+container (privileged, in the host's process namespace) that runs the host's
+`flamekeeper update --version X`. The output is kept in `<data dir>/self-update/update.log`.
 
 ## Signing in
 
@@ -109,7 +128,7 @@ FlameKeeper serves plain HTTP, so on an untrusted network bind it to `127.0.0.1`
 (`--bind 127.0.0.1`) and put it behind a reverse proxy with HTTPS (set `BASE_PATH` to
 serve it under a sub-path). Anyone signed in can control your servers and read role
 passwords. FlameKeeper also has access to the Docker socket, which is equivalent to root on
-the host.
+the host; updating from the UI uses that to run `flamekeeper update` on the host.
 
 ## Changing settings
 
@@ -188,6 +207,7 @@ npm run typecheck && npm test && npm run build
 docker run --rm -v "$PWD":/mnt koalaman/shellcheck:stable -x /mnt/installer/install.sh /mnt/installer/flamekeeper
 docker run --rm -v "$PWD":/code -w /code bats/bats:latest installer/tests
 installer/tests/e2e-clean-host.sh flamekeeper:dev   # fresh Ubuntu, installs Docker, then FlameKeeper
+installer/tests/e2e-self-update.sh                  # same, then updates from the UI to the latest release (uses the internet)
 
 # Image
 docker build -t flamekeeper:dev .

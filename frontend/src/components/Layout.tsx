@@ -4,6 +4,7 @@ import { Link, NavLink, Outlet, useLocation, useMatch } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "./AuthGate";
 import { useLiveUpdates, useWorlds } from "../hooks/live";
+import { updateTooltip } from "../settings/appUpdate";
 
 const WORLD_PAGES = [
   ["difficulty", "⚔", "Difficulty"],
@@ -29,6 +30,13 @@ export function Layout() {
   const { connected } = useLiveUpdates();
   const { data: worlds = [] } = useWorlds();
   const { data: system } = useQuery({ queryKey: ["system"], queryFn: api.system, staleTime: 60_000 });
+  const { data: appUpdate } = useQuery({
+    queryKey: ["app-update"],
+    queryFn: api.appUpdate,
+    staleTime: 60_000,
+    refetchInterval: 30 * 60_000,
+  });
+  const updateTip = updateTooltip(appUpdate);
   const auth = useAuth();
   const match = useMatch("/worlds/:slug/*");
   const world = match ? worlds.find((w) => w.slug === match.params.slug) : undefined;
@@ -68,6 +76,11 @@ export function Layout() {
           <div className="navgroup">App</div>
           <NavLink to="/settings">
             <span className="ico">⚒</span> Settings
+            {updateTip && (
+              <span className="nav-alert" tabIndex={0} role="img" aria-label={updateTip} data-tip={updateTip}>
+                !
+              </span>
+            )}
           </NavLink>
         </nav>
         <div className="foot">

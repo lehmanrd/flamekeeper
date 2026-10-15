@@ -1,10 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Fragment, useEffect, useState } from "react";
+import { Modal } from "../components/Modal";
 import { Toggle } from "../components/Toggle";
 import { api } from "../api/client";
 import { useAuth } from "../components/AuthGate";
 import type { SelfCheck } from "../api/types";
-import { formatBytes } from "../format";
+import { formatBytes, formatTime } from "../format";
+import { updatePhase } from "../settings/appUpdate";
 
 const TONE: Record<SelfCheck["status"], string> = { ok: "ok", warn: "warn", fail: "bad", skip: "off" };
 
@@ -22,6 +24,7 @@ export function Settings() {
         <h1>Settings</h1>
       </div>
       {isLoading && <p className="muted">Loading…</p>}
+      <AppUpdateCard />
       <div className="grid g2" style={{ marginBottom: 16 }}>
         <NotificationsCard />
         <AccountCard />
@@ -68,6 +71,178 @@ export function Settings() {
         </div>
       )}
     </>
+  );
+}
+
+const WAITING_KEY = "fk-update-waiting";
+
+function readWaiting(): string | null {
+  try {
+    return sessionStorage.getItem(WAITING_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeWaiting(version: string | null) {
+  try {
+    if (version) sessionStorage.setItem(WAITING_KEY, version);
+    else sessionStorage.removeItem(WAITING_KEY);
+  } catch {
+    /* private mode: the page just won't reload by itself after a manual refresh */
+  }
+}
+
+/** FlameKeeper's own version: is a newer release out, and update it from here. */
+function AppUpdateCard() {
+  const qc = useQueryClient();
+  const [waitingFor, setWaitingFor] = useState<string | null>(readWaiting);
+  const [confirm, setConfirm] = useState(false);
+  const busy = (s: { run: { status: string } | null } | undefined) => s?.run?.status === "running";
+  const { data, isError } = useQuery({
+    queryKey: ["app-update"],
+    queryFn: api.appUpdate,
+    retry: false,
+    refetchInterval: (q) => (waitingFor || busy(q.state.data) ? 2000 : 30 * 60_000),
+  });
+  const phase = updatePhase(data, isError, waitingFor);
+  const check = useMutation({
+    mutationFn: api.checkAppUpdate,
+    onSuccess: (v) => qc.setQueryData(["app-update"], v),
+  });
+  const start = useMutation({
+    mutationFn: (version: string) => api.startAppUpdate(version),
+    onSuccess: (v, version) => {
+      writeWaiting(version);
+      setWaitingFor(version);
+      setConfirm(false);
+      qc.setQueryData(["app-update"], v);
+    },
+  });
+  useEffect(() => {
+    // The new version is answering: load its UI.
+    if (waitingFor && data?.current === waitingFor) {
+      writeWaiting(null);
+      window.location.reload();
+    }
+    if (waitingFor && data?.run?.status === "failed" && data.run.to === waitingFor) {
+      writeWaiting(null);
+      setWaitingFor(null);
+    }
+  }, [waitingFor, data]);
+
+  if (!data) {
+    return isError ? null : <div className="card" style={{ marginBottom: 16 }}><h3>FlameKeeper updates</h3><p className="muted">Loading…</p></div>;
+  }
+  const latest = data.latest;
+  const run = data.run;
+  const working = phase === "updating" || phase === "restarting" || phase === "finishing" || phase === "done";
+  return (
+    <div className={`card${phase === "available" ? " card-attention" : ""}`} style={{ marginBottom: 16 }} id="updates">
+      <div className="top" style={{ margin: "0 0 10px" }}>
+        <h3 style={{ margin: 0 }}>FlameKeeper updates</h3>
+        <span className="spacer" />
+        <button className="btn sm" disabled={check.isPending || working} onClick={() => check.mutate()}>
+          {check.isPending ? "Checking…" : "Check now"}
+        </button>
+      </div>
+      <dl className="kv">
+        <dt>This version</dt>
+        <dd>{data.current === "dev" ? "development build" : data.current}</dd>
+        <dt>Latest release</dt>
+        <dd>
+          {latest ? (
+            <>
+              {latest.version}
+              {latest.published_at && <span className="muted"> · released {formatTime(latest.published_at)}</span>}
+              {latest.url && <> · <a href={latest.url} target="_blank" rel="noreferrer">What's new</a></>}
+            </>
+          ) : (
+            <span className="muted">not checked yet</span>
+          )}
+        </dd>
+        <dt>Last checked</dt>
+        <dd>
+          {data.checked_at ? formatTime(data.checked_at) : "never"}
+          {!data.checks_enabled && <span className="muted"> · automatic checks are off (see Defaults &amp; checks)</span>}
+        </dd>
+      </dl>
+      {data.check_error && <p className="error-text">{data.check_error}</p>}
+      {check.error && <p className="error-text">{(check.error as Error).message}</p>}
+
+      {phase === "available" && latest && (
+        data.can_update ? (
+          <div className="banner warn" style={{ marginTop: 12 }}>
+            <span>
+              <b>FlameKeeper {latest.version} is available.</b> Updating takes about a minute. Game servers keep running
+              and players stay connected.
+            </span>
+            <span className="spacer" />
+            <button className="btn primary sm" onClick={() => setConfirm(true)}>Update to {latest.version}</button>
+          </div>
+        ) : (
+          <div className="banner warn" style={{ marginTop: 12 }}>
+            <span>
+              <b>FlameKeeper {latest.version} is available.</b> {data.cannot_update_reason} To update the installer way, run{" "}
+              <span className="mono">{data.command}</span> on the server.
+            </span>
+          </div>
+        )
+      )}
+      {working && run && (
+        <div className="banner info" style={{ marginTop: 12 }} role="status">
+          <span className="pill info pulse" style={{ padding: 0 }} />
+          <span>
+            {phase === "updating" && <>Updating to {run.to}: downloading the new version…</>}
+            {phase === "restarting" && <>FlameKeeper is restarting with {run.to}. This page reloads when it's back.</>}
+            {(phase === "finishing" || phase === "done") && <>FlameKeeper {run.to} is running; finishing up…</>}
+          </span>
+        </div>
+      )}
+      {phase === "failed" && run && (
+        <div className="banner bad" style={{ marginTop: 12, display: "block" }} role="alert">
+          <b>The update to {run.to} failed.</b> {run.error} FlameKeeper {data.current} is still running. You can try again,
+          or run <span className="mono">{data.command}</span> on the server to see the full output.
+          {run.log_tail && <pre className="mono" style={{ whiteSpace: "pre-wrap", maxHeight: 220, overflow: "auto", marginBottom: 0 }}>{run.log_tail}</pre>}
+        </div>
+      )}
+      {phase === "idle" && run?.status === "succeeded" && run.to === data.current && (
+        <p className="muted small" style={{ marginBottom: 0 }}>
+          Updated from {run.from} to {run.to} {formatTime(run.finished_at)}.
+        </p>
+      )}
+      {phase === "idle" && latest && !data.update_available && data.current !== "dev" && !(run?.status === "succeeded" && run.to === data.current) && (
+        <p className="muted small" style={{ marginBottom: 0 }}>FlameKeeper is up to date.</p>
+      )}
+
+      <Modal
+        open={confirm}
+        onClose={() => setConfirm(false)}
+        title={`Update FlameKeeper to ${latest?.version}?`}
+        actions={
+          <>
+            <button className="btn" onClick={() => setConfirm(false)}>Cancel</button>
+            <button className="btn primary" disabled={start.isPending || !latest} onClick={() => latest && start.mutate(latest.version)}>
+              {start.isPending ? "Starting…" : "Update now"}
+            </button>
+          </>
+        }
+      >
+        <p style={{ marginTop: 0 }}>
+          FlameKeeper downloads {latest?.version} and restarts. The web page is unavailable for about a minute, then
+          reloads by itself.
+        </p>
+        <p>
+          <b>Game servers keep running</b> and players stay connected. Scheduled backups and update checks pause while
+          FlameKeeper restarts.
+        </p>
+        <p className="muted small" style={{ marginBottom: 0 }}>
+          This runs <span className="mono">{data.command}</span> on the server for you. Your settings, worlds and backups
+          are kept.
+        </p>
+        {start.error && <p className="error-text">{(start.error as Error).message}</p>}
+      </Modal>
+    </div>
   );
 }
 

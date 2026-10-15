@@ -40,7 +40,13 @@ EVENTS: dict[str, tuple[str, bool]] = {
     "updated": ("Update installed", True),
     "restored": ("Backup restored", True),
     "job_failed": ("Something failed (backup, update, restore, start…)", True),
+    "app_update_available": ("New FlameKeeper release", True),
+    "app_updated": ("FlameKeeper updated (or the update failed)", True),
 }
+# The events that existed before saved settings recorded which ones the admin had seen.
+# Events added later start at their default for those settings.
+_EVENTS_BEFORE_0_5 = ["online", "stopped", "crashed", "warning", "player_joined",
+                      "player_left", "update_available", "updated", "restored", "job_failed"]
 
 GREEN, RED, ORANGE, BLUE, GREY = 0x4FBF8F, 0xE2574C, 0xE3A33B, 0x5AA7D8, 0x9B9BB5
 JOB_LABELS = {
@@ -101,6 +107,21 @@ def event_message(kind: str, world: str, data: dict[str, Any]) -> dict[str, Any]
     return None
 
 
+def app_message(kind: str, data: dict[str, Any]) -> dict[str, Any] | None:
+    """Embeds for FlameKeeper's own updates (app.services.app_update)."""
+    if kind == "app_update_available":
+        return embed(f"⬆ FlameKeeper {data.get('version')} is available", BLUE,
+                     f"You have {data.get('current')}. Update under Settings → FlameKeeper "
+                     f"updates.\n{data.get('url') or ''}".strip())
+    if kind == "app_updated":
+        if data.get("ok"):
+            return embed(f"✅ FlameKeeper updated to {data.get('to')}", GREEN,
+                         f"From {data.get('from')}")
+        return embed(f"❌ FlameKeeper update to {data.get('to')} failed", RED,
+                     str(data.get("error", "")))
+    return None
+
+
 def job_failed_message(job: dict[str, Any], world: str) -> dict[str, Any]:
     label = JOB_LABELS.get(job.get("type", ""), str(job.get("type", "Action")).title())
     return embed(f"❌ {label} failed on {world}", RED, str(job.get("message", "")))
@@ -129,9 +150,11 @@ class Notifier:
         with session_scope() as s:
             row = s.get(AppSetting, SETTING_KEY)
             if row and isinstance(row.value, dict):
-                events = [e for e in row.value.get("events", []) if e in EVENTS]
+                seen = row.value.get("seen") or _EVENTS_BEFORE_0_5
+                chosen = set(row.value.get("events", [])) | {
+                    e for e in self._defaults() if e not in seen}
                 self._config = {"discord_webhook": str(row.value.get("discord_webhook", "")),
-                                "events": events}
+                                "events": [e for e in EVENTS if e in chosen]}
 
     def view(self) -> dict[str, Any]:
         url = self._config["discord_webhook"]
@@ -157,12 +180,13 @@ class Notifier:
             if unknown:
                 raise NotificationError(f"Unknown events: {', '.join(unknown)}")
             config["events"] = [e for e in EVENTS if e in events]
+        stored = {**config, "seen": list(EVENTS)}
         with session_scope() as s:
             row = s.get(AppSetting, SETTING_KEY)
             if row:
-                row.value = config
+                row.value = stored
             else:
-                s.add(AppSetting(key=SETTING_KEY, value=config))
+                s.add(AppSetting(key=SETTING_KEY, value=stored))
         self._config = config
         return self.view()
 
@@ -186,6 +210,10 @@ class Notifier:
             return
         message = event_message(kind, self._name(event.get("world_id")), event.get("data") or {})
         if message:
+            self._enqueue(message)
+
+    def on_app_event(self, kind: str, data: dict[str, Any]) -> None:
+        if kind in self._config["events"] and (message := app_message(kind, data)):
             self._enqueue(message)
 
     def on_job(self, job: dict[str, Any]) -> None:

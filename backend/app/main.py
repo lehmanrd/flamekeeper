@@ -55,6 +55,8 @@ async def startup(services: Services) -> None:
     services.jobs.recover_interrupted()
     services.auth.log_setup_hint()
     services.notifier.load()
+    services.app_update.load()
+    services.app_update.start()
     services.selfcheck = await run_selfcheck(services.settings, services.docker)
     for check in services.selfcheck.checks:
         level = logging.ERROR if check.status == "fail" else logging.INFO
@@ -104,6 +106,7 @@ def create_app(
             # Game containers keep running: the controller only stops its own tasks.
             await services.scheduler.stop()
             await services.notifier.stop()
+            await services.app_update.stop()
             await services.monitor.stop()
             await services.jobs.shutdown()
 

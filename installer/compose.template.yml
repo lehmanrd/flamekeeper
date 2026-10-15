@@ -17,4 +17,6 @@ services:
       - DATA_DIR=${DATA_DIR}
       - TZ=${TZ}
       - BASE_PATH=${BASE_PATH}
+      # Lets FlameKeeper update itself from the UI by running this command on the host.
+      - FLAMEKEEPER_CLI=__FK_CLI__
     stop_grace_period: 30s

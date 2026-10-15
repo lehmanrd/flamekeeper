@@ -258,7 +258,7 @@ class BackupService:
         build = installed_build(paths)
         manifest = {
             "app": APP_NAME,
-            "app_version": os.environ.get("FLAMEKEEPER_VERSION", "dev"),
+            "app_version": self.settings.flamekeeper_version,
             "world": {"id": world.id, "slug": world.slug, "display_name": world.display_name},
             "created_at": _now().isoformat(),
             "kind": kind,

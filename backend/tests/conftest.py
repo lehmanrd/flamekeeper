@@ -25,6 +25,7 @@ def settings(tmp_path: Path) -> Settings:
         default_puid=1000,
         default_pgid=1000,
         static_dir=tmp_path / "no-static",
+        check_for_app_updates=False,
     )
 
 

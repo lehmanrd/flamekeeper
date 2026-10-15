@@ -24,6 +24,8 @@ EDITABLE: dict[str, dict[str, Any]] = {
                          "label": "First query port"},
     "metrics_retention_days": {"type": "int", "min": 1, "max": 90,
                                "label": "Metrics retention (days)"},
+    "check_for_app_updates": {"type": "bool",
+                              "label": "Check GitHub for new FlameKeeper releases"},
 }
 
 

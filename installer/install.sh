@@ -436,7 +436,8 @@ write_files() {
   local tmp
   tmp="$(mktemp -d)"
   render_env >"$tmp/.env"
-  embedded_or_file "$EMBEDDED_COMPOSE" compose.template.yml >"$tmp/docker-compose.yml"
+  embedded_or_file "$EMBEDDED_COMPOSE" compose.template.yml |
+    sed -e "s#__FK_CLI__#$FK_BIN_DIR/flamekeeper#g" >"$tmp/docker-compose.yml"
   embedded_or_file "$EMBEDDED_CLI" flamekeeper |
     sed -e "s#__FK_REPO__#$FK_REPO#g" -e "s#__FK_INSTALL_DIR__#$FK_INSTALL_DIR#g" >"$tmp/flamekeeper"
 

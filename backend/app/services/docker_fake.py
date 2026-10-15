@@ -42,6 +42,8 @@ class FakeDockerAdapter:
         self.registry_digests: dict[str, str] = {}
         self.update_delay = 0.0
         self._followers: dict[str, list[asyncio.Queue[str | None]]] = {}
+        self.detached: list[tuple[str, str, list[str], bool, bool]] = []
+        self._seq = 0
 
     # -- test helpers ----------------------------------------------------------------
 
@@ -302,6 +304,30 @@ class FakeDockerAdapter:
 
     async def connect_network(self, network: str, name_or_id: str) -> None:
         self._require(name_or_id)
+
+    async def run_detached(
+        self,
+        name: str,
+        image: str,
+        cmd: list[str],
+        *,
+        labels: dict[str, str],
+        privileged: bool = False,
+        pid_host: bool = False,
+    ) -> ContainerInfo:
+        """Starts nothing: tests finish the container with finish_detached()."""
+        if self._find(name):
+            raise DockerError(f"Conflict: container name {name} in use")
+        self._seq += 1
+        info = ContainerInfo(id=f"detached{self._seq:06d}", name=name, image=image,
+                             labels=labels, status="running", started_at=datetime.now(UTC))
+        self.containers[info.id] = info
+        self.detached.append((name, image, cmd, privileged, pid_host))
+        return info
+
+    def finish_detached(self, name: str, exit_code: int) -> None:
+        c = self._require(name)
+        c.status, c.exit_code, c.finished_at = "exited", exit_code, datetime.now(UTC)
 
     async def run_helper(
         self,
