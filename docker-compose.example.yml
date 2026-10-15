@@ -1,0 +1,20 @@
+# FlameKeeper: Enshrouded dedicated server manager.
+# The one-line installer (installer/install.sh) writes an equivalent file to
+# /opt/flamekeeper/docker-compose.yml; use this one if you manage compose yourself.
+services:
+  flamekeeper:
+    image: ghcr.io/lehmanrd/flamekeeper:latest
+    container_name: flamekeeper
+    restart: unless-stopped
+    ports:
+      - "8080:8080"            # web UI (no login: keep it on a trusted network)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # DATA_DIR must be mounted at the SAME path inside and outside: FlameKeeper
+      # creates game containers through the host's Docker, which needs host paths.
+      - /srv/flamekeeper:/srv/flamekeeper
+    environment:
+      - DATA_DIR=/srv/flamekeeper
+      - TZ=Etc/UTC
+      # - BASE_PATH=/flamekeeper   # when served under a sub-path by a reverse proxy
+    stop_grace_period: 30s

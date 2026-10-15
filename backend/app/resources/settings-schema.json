@@ -1,0 +1,1027 @@
+{
+  "$comment": "Source of truth for the difficulty editor. Tabs, row order, labels and preset values are transcribed from the in-game Difficulty screen. Keys, ranges and option values follow Keen's official 'Server Gameplay Settings' article. Conflict policy: Keen's documentation wins, and every conflict was tested on a real server and the result recorded in a $verified field (see docs/game-server-behavior.md); the shipped default file and the mornedhels docs are secondary. Durations are nanoseconds in JSON, minutes in the UI. Server behavior: out-of-range numbers are clamped; an invalid enum string stops the server from booting.",
+  "schemaVersion": 1,
+  "presetKey": "gameSettingsPreset",
+  "presets": [
+    "Default",
+    "Relaxed",
+    "Hard",
+    "Survival",
+    "Custom"
+  ],
+  "tabs": [
+    {
+      "id": "enemies",
+      "label": "Enemies",
+      "hotkeyPrev": "Q",
+      "hotkeyNext": "E"
+    },
+    {
+      "id": "player",
+      "label": "Player"
+    },
+    {
+      "id": "survival",
+      "label": "Survival"
+    },
+    {
+      "id": "resources",
+      "label": "Resources"
+    }
+  ],
+  "settings": [
+    {
+      "key": "enemyDamageFactor",
+      "env": "SERVER_GS_ENEMY_DAMAGE_FACTOR",
+      "label": "Enemy Damage",
+      "tab": "enemies",
+      "type": "factor",
+      "display": "percent",
+      "min": 0.25,
+      "max": 5,
+      "step": 0.05,
+      "default": 1,
+      "presets": {
+        "Default": 1,
+        "Relaxed": 0.5,
+        "Hard": 1.5,
+        "Survival": 1.5
+      },
+      "description": "Scales all enemy damage by this value. Excludes bosses."
+    },
+    {
+      "key": "bossDamageFactor",
+      "env": "SERVER_GS_BOSS_DAMAGE_FACTOR",
+      "label": "Boss Damage",
+      "tab": "enemies",
+      "type": "factor",
+      "display": "percent",
+      "min": 0.2,
+      "max": 5,
+      "step": 0.05,
+      "default": 1,
+      "presets": {
+        "Default": 1,
+        "Relaxed": 0.5,
+        "Hard": 1,
+        "Survival": 1
+      },
+      "description": "Scales the damage of boss attacks."
+    },
+    {
+      "key": "enemyHealthFactor",
+      "env": "SERVER_GS_ENEMY_HEALTH_FACTOR",
+      "label": "Enemy Health",
+      "tab": "enemies",
+      "type": "factor",
+      "display": "percent",
+      "min": 0.25,
+      "max": 4,
+      "step": 0.05,
+      "default": 1,
+      "presets": {
+        "Default": 1,
+        "Relaxed": 0.5,
+        "Hard": 1,
+        "Survival": 1
+      },
+      "description": "Scales all enemy health by this value, except bosses."
+    },
+    {
+      "key": "bossHealthFactor",
+      "env": "SERVER_GS_BOSS_HEALTH_FACTOR",
+      "label": "Boss Health",
+      "tab": "enemies",
+      "type": "factor",
+      "display": "percent",
+      "min": 0.2,
+      "max": 5,
+      "step": 0.05,
+      "default": 1,
+      "presets": {
+        "Default": 1,
+        "Relaxed": 0.5,
+        "Hard": 1.5,
+        "Survival": 1.5
+      },
+      "description": "Scales the health of all bosses by this value."
+    },
+    {
+      "key": "enemyStaminaFactor",
+      "env": "SERVER_GS_ENEMY_STAMINA_FACTOR",
+      "label": "Enemy Stamina",
+      "tab": "enemies",
+      "type": "factor",
+      "display": "percent",
+      "min": 0.5,
+      "max": 2,
+      "step": 0.05,
+      "default": 1,
+      "presets": {
+        "Default": 1,
+        "Relaxed": 0.5,
+        "Hard": 1,
+        "Survival": 1
+      },
+      "description": "Scales enemy stamina. Higher stamina means enemies take longer to stun. Excludes bosses.",
+      "aliases": [
+        "Enemy Stun Modifier"
+      ]
+    },
+    {
+      "key": "enemyPerceptionRangeFactor",
+      "env": "SERVER_GS_ENEMY_PERCEPTION_RANGE_FACTOR",
+      "label": "Enemy Perception Range",
+      "tab": "enemies",
+      "type": "factor",
+      "display": "percent",
+      "min": 0.5,
+      "max": 2,
+      "step": 0.05,
+      "default": 1,
+      "presets": {
+        "Default": 1,
+        "Relaxed": 0.75,
+        "Hard": 1,
+        "Survival": 1
+      },
+      "description": "Scales how far enemies can see and hear the player. Excludes bosses."
+    },
+    {
+      "key": "pacifyAllEnemies",
+      "env": "SERVER_GS_PACIFY_ALL_ENEMIES",
+      "label": "Pacify Enemies",
+      "tab": "enemies",
+      "type": "bool",
+      "default": false,
+      "presets": {
+        "Default": false,
+        "Relaxed": false,
+        "Hard": false,
+        "Survival": false
+      },
+      "description": "Enemies won't attack players until attacked first. Excludes bosses."
+    },
+    {
+      "key": "aggroPoolAmount",
+      "env": "SERVER_GS_AGGRO_POOL_AMOUNT",
+      "label": "Simultaneous Enemy Attacks",
+      "tab": "enemies",
+      "type": "enum",
+      "default": "Normal",
+      "options": [
+        {
+          "value": "Few",
+          "label": "Easy"
+        },
+        {
+          "value": "Normal",
+          "label": "Default"
+        },
+        {
+          "value": "Many",
+          "label": "Many"
+        },
+        {
+          "value": "Extreme",
+          "label": "Extreme"
+        }
+      ],
+      "presets": {
+        "Default": "Normal",
+        "Relaxed": "Few",
+        "Hard": "Normal",
+        "Survival": "Normal"
+      },
+      "$verified": "Verified on a real server: 'Few' boots, is kept, and shows 'Easy' in game.",
+      "description": "How many enemies are allowed to attack at the same time."
+    },
+    {
+      "key": "threatBonus",
+      "env": "SERVER_GS_THREAT_BONUS",
+      "label": "Enemy Attack Frequency",
+      "tab": "enemies",
+      "type": "factor",
+      "display": "percent",
+      "min": 0.25,
+      "max": 4,
+      "step": 0.05,
+      "default": 1,
+      "presets": {
+        "Default": 1,
+        "Relaxed": 0.5,
+        "Hard": 1.5,
+        "Survival": 1.5
+      },
+      "description": "Scales how often enemies attack. Excludes bosses."
+    },
+    {
+      "key": "randomSpawnerAmount",
+      "env": "SERVER_GS_RANDOM_SPAWNER_AMOUNT",
+      "label": "Enemy Amount",
+      "tab": "enemies",
+      "type": "enum",
+      "default": "Normal",
+      "options": [
+        {
+          "value": "Few",
+          "label": "Few"
+        },
+        {
+          "value": "Normal",
+          "label": "Normal"
+        },
+        {
+          "value": "Many",
+          "label": "More"
+        },
+        {
+          "value": "Extreme",
+          "label": "Many"
+        }
+      ],
+      "presets": {
+        "Default": "Normal",
+        "Relaxed": "Few",
+        "Hard": "Many",
+        "Survival": "Many"
+      },
+      "description": "Controls the number of enemies in the world.",
+      "$verified": "Verified on a real server: 'Many' and 'Extreme' boot and are kept. In game, 'Many' shows 'More' and 'Extreme' shows 'Many'."
+    },
+    {
+      "key": "playerHealthFactor",
+      "env": "SERVER_GS_PLAYER_HEALTH_FACTOR",
+      "label": "Player Health",
+      "tab": "player",
+      "type": "factor",
+      "display": "percent",
+      "min": 0.25,
+      "max": 4,
+      "step": 0.05,
+      "default": 1,
+      "presets": {
+        "Default": 1,
+        "Relaxed": 2,
+        "Hard": 1,
+        "Survival": 0.75
+      },
+      "description": "Scales the maximum player health."
+    },
+    {
+      "key": "playerManaFactor",
+      "env": "SERVER_GS_PLAYER_MANA_FACTOR",
+      "label": "Player Mana",
+      "tab": "player",
+      "type": "factor",
+      "display": "percent",
+      "min": 0.25,
+      "max": 4,
+      "step": 0.05,
+      "default": 1,
+      "presets": {
+        "Default": 1,
+        "Relaxed": 2,
+        "Hard": 1,
+        "Survival": 1
+      },
+      "description": "Scales players' maximum mana."
+    },
+    {
+      "key": "playerStaminaFactor",
+      "env": "SERVER_GS_PLAYER_STAMINA_FACTOR",
+      "label": "Player Stamina",
+      "tab": "player",
+      "type": "factor",
+      "display": "percent",
+      "min": 0.25,
+      "max": 4,
+      "step": 0.05,
+      "default": 1,
+      "presets": {
+        "Default": 1,
+        "Relaxed": 2,
+        "Hard": 1,
+        "Survival": 1
+      },
+      "description": "Scales players' maximum stamina."
+    },
+    {
+      "key": "playerBodyHeatFactor",
+      "env": "SERVER_GS_PLAYER_BODY_HEAT_FACTOR",
+      "label": "Frost Resistance Duration",
+      "tab": "player",
+      "type": "factor",
+      "default": 1,
+      "presets": {
+        "Default": 1,
+        "Relaxed": 2,
+        "Hard": 1,
+        "Survival": 0.75
+      },
+      "description": "Scales available body heat. Higher means players can stay in very cold areas longer before hypothermia.",
+      "display": "percent",
+      "min": 0.5,
+      "max": 2,
+      "step": 0.05,
+      "$verified": "Verified on a real server: 0.75 boots, is kept, and shows 75% in game."
+    },
+    {
+      "key": "playerDivingTimeFactor",
+      "env": "SERVER_GS_PLAYER_DIVING_TIME_FACTOR",
+      "label": "Diving Time",
+      "tab": "player",
+      "type": "factor",
+      "display": "percent",
+      "min": 0.5,
+      "max": 2,
+      "step": 0.05,
+      "default": 1,
+      "presets": {
+        "Default": 1,
+        "Relaxed": 1.5,
+        "Hard": 0.9,
+        "Survival": 0.75
+      },
+      "description": "Scales initial oxygen, and therefore time available underwater."
+    },
+    {
+      "key": "experienceMiningFactor",
+      "env": "SERVER_GS_EXPERIENCE_MINING_FACTOR",
+      "label": "Mining XP",
+      "tab": "player",
+      "type": "factor",
+      "display": "percent",
+      "min": 0,
+      "max": 2,
+      "step": 0.05,
+      "default": 1,
+      "presets": {
+        "Default": 1,
+        "Relaxed": 1.25,
+        "Hard": 0.5,
+        "Survival": 0.5
+      },
+      "description": "Scales XP from mining resources."
+    },
+    {
+      "key": "experienceExplorationQuestsFactor",
+      "env": "SERVER_GS_EXPERIENCE_EXPLORATION_QUESTS_FACTOR",
+      "label": "Quest & Exploration XP",
+      "tab": "player",
+      "type": "factor",
+      "display": "percent",
+      "min": 0.25,
+      "max": 2,
+      "step": 0.05,
+      "default": 1,
+      "presets": {
+        "Default": 1,
+        "Relaxed": 1,
+        "Hard": 1,
+        "Survival": 1
+      },
+      "description": "Scales XP from exploring and completing quests."
+    },
+    {
+      "key": "experienceCombatFactor",
+      "env": "SERVER_GS_EXPERIENCE_COMBAT_FACTOR",
+      "label": "Combat XP",
+      "tab": "player",
+      "type": "factor",
+      "display": "percent",
+      "min": 0.25,
+      "max": 2,
+      "step": 0.05,
+      "default": 1,
+      "presets": {
+        "Default": 1,
+        "Relaxed": 1.5,
+        "Hard": 0.5,
+        "Survival": 0.5
+      },
+      "description": "Scales XP from combat."
+    },
+    {
+      "key": "enableStarvingDebuff",
+      "env": "SERVER_GS_ENABLE_STARVING_DEBUFF",
+      "label": "Starvation Mode",
+      "tab": "survival",
+      "type": "bool",
+      "default": false,
+      "presets": {
+        "Default": false,
+        "Relaxed": false,
+        "Hard": false,
+        "Survival": true
+      },
+      "description": "Enables hunger and starvation. Players need to eat or drink regularly to survive; while starving they lose health until death."
+    },
+    {
+      "key": "fromHungerToStarving",
+      "env": "SERVER_GS_FROM_HUNGER_TO_STARVING",
+      "label": "Time until starvation",
+      "tab": "survival",
+      "type": "duration_ns",
+      "display": "minutes",
+      "min": 300000000000,
+      "max": 1200000000000,
+      "step": 60000000000,
+      "default": 600000000000,
+      "dependsOn": {
+        "key": "enableStarvingDebuff",
+        "equals": true
+      },
+      "presets": {
+        "Default": 600000000000,
+        "Relaxed": 600000000000,
+        "Hard": 600000000000,
+        "Survival": 600000000000
+      },
+      "description": "How long the hungry state lasts before starving begins.",
+      "$comment": "In-game shows '—' when Starvation Mode is off (dependsOn); the value still exists in JSON."
+    },
+    {
+      "key": "shroudTimeFactor",
+      "env": "SERVER_GS_SHROUD_TIME_FACTOR",
+      "label": "Time in the Shroud",
+      "tab": "survival",
+      "type": "factor",
+      "display": "percent",
+      "min": 0.5,
+      "max": 2,
+      "step": 0.05,
+      "default": 1,
+      "presets": {
+        "Default": 1,
+        "Relaxed": 1.5,
+        "Hard": 1,
+        "Survival": 1
+      },
+      "description": "Scales how long characters can remain inside the Shroud."
+    },
+    {
+      "key": "tombstoneMode",
+      "env": "SERVER_GS_TOMBSTONE_MODE",
+      "label": "Loot Loss On Death",
+      "tab": "survival",
+      "type": "enum",
+      "default": "AddBackpackMaterials",
+      "options": [
+        {
+          "value": "NoTombstone",
+          "label": "Keep All"
+        },
+        {
+          "value": "AddBackpackMaterials",
+          "label": "Default"
+        },
+        {
+          "value": "Everything",
+          "label": "Lose All"
+        }
+      ],
+      "presets": {
+        "Default": "AddBackpackMaterials",
+        "Relaxed": "NoTombstone",
+        "Hard": "AddBackpackMaterials",
+        "Survival": "Everything"
+      },
+      "description": "What players lose on death. Default drops backpack materials into a recoverable tombstone; Lose All drops everything; Keep All drops nothing."
+    },
+    {
+      "key": "dayTimeDuration",
+      "env": "SERVER_GS_DAY_TIME_DURATION",
+      "label": "Day Duration",
+      "tab": "survival",
+      "type": "duration_ns",
+      "display": "minutes",
+      "min": 120000000000,
+      "max": 3600000000000,
+      "step": 60000000000,
+      "default": 1800000000000,
+      "presets": {
+        "Default": 1800000000000,
+        "Relaxed": 1800000000000,
+        "Hard": 1800000000000,
+        "Survival": 1800000000000
+      },
+      "description": "Length of daytime."
+    },
+    {
+      "key": "nightTimeDuration",
+      "env": "SERVER_GS_NIGHT_TIME_DURATION",
+      "label": "Night Duration",
+      "tab": "survival",
+      "type": "duration_ns",
+      "display": "minutes",
+      "min": 120000000000,
+      "max": 3600000000000,
+      "step": 60000000000,
+      "default": 720000000000,
+      "presets": {
+        "Default": 720000000000,
+        "Relaxed": 720000000000,
+        "Hard": 720000000000,
+        "Survival": 1200000000000
+      },
+      "description": "Length of nighttime.",
+      "$verified": "Verified on a real server: 3600000000000 boots, is kept (not clamped to 30 min), and shows '1h' in game."
+    },
+    {
+      "key": "foodBuffDurationFactor",
+      "env": "SERVER_GS_FOOD_BUFF_DURATION_FACTOR",
+      "label": "Food Buff Duration",
+      "tab": "survival",
+      "type": "factor",
+      "display": "percent",
+      "min": 0.5,
+      "max": 2,
+      "step": 0.05,
+      "default": 1,
+      "presets": {
+        "Default": 1,
+        "Relaxed": 1.5,
+        "Hard": 0.9,
+        "Survival": 0.7
+      },
+      "description": "Scales how long food buffs last."
+    },
+    {
+      "key": "enableDurability",
+      "env": "SERVER_GS_ENABLE_DURABILITY",
+      "label": "Weapon Durability",
+      "tab": "survival",
+      "type": "bool",
+      "default": true,
+      "presets": {
+        "Default": true,
+        "Relaxed": false,
+        "Hard": true,
+        "Survival": true
+      },
+      "description": "Whether weapons lose durability."
+    },
+    {
+      "key": "weatherFrequency",
+      "env": "SERVER_GS_WEATHER_FREQUENCY",
+      "label": "Harsh Weather Occurrences",
+      "tab": "survival",
+      "type": "enum",
+      "default": "Normal",
+      "options": [
+        {
+          "value": "Disabled",
+          "label": "Disabled"
+        },
+        {
+          "value": "Rare",
+          "label": "Rare"
+        },
+        {
+          "value": "Normal",
+          "label": "Normal"
+        },
+        {
+          "value": "Often",
+          "label": "Often"
+        }
+      ],
+      "presets": {
+        "Default": "Normal",
+        "Relaxed": "Rare",
+        "Hard": "Normal",
+        "Survival": "Often"
+      },
+      "description": "How often new weather phenomena appear."
+    },
+    {
+      "key": "enableGliderTurbulences",
+      "env": "SERVER_GS_ENABLE_GLIDER_TURBULENCES",
+      "label": "Glider Turbulences",
+      "tab": "survival",
+      "type": "bool",
+      "default": true,
+      "presets": {
+        "Default": true,
+        "Relaxed": false,
+        "Hard": true,
+        "Survival": true
+      },
+      "description": "If off, the glider ignores air turbulence (legacy behavior)."
+    },
+    {
+      "key": "tamingStartleRepercussion",
+      "env": "SERVER_GS_TAMING_STARTLE_REPERCUSSION",
+      "label": "Taming Startle Repercussion",
+      "tab": "survival",
+      "type": "enum",
+      "default": "LoseSomeProgress",
+      "options": [
+        {
+          "value": "KeepProgress",
+          "label": "Keep Progress"
+        },
+        {
+          "value": "LoseSomeProgress",
+          "label": "Lose Some Progress"
+        },
+        {
+          "value": "LoseAllProgress",
+          "label": "Lose All Progress"
+        }
+      ],
+      "presets": {
+        "Default": "LoseSomeProgress",
+        "Relaxed": "KeepProgress",
+        "Hard": "LoseSomeProgress",
+        "Survival": "LoseAllProgress"
+      },
+      "description": "What happens to taming progress (hearts) when wildlife is startled."
+    },
+    {
+      "key": "fishingDifficulty",
+      "env": "SERVER_GS_FISHING_DIFFICULTY",
+      "label": "Fishing Difficulty",
+      "tab": "survival",
+      "type": "enum",
+      "default": "Normal",
+      "options": [
+        {
+          "value": "VeryEasy",
+          "label": "Very Easy"
+        },
+        {
+          "value": "Easy",
+          "label": "Easy"
+        },
+        {
+          "value": "Normal",
+          "label": "Default"
+        },
+        {
+          "value": "Hard",
+          "label": "Hard"
+        },
+        {
+          "value": "VeryHard",
+          "label": "Very Hard"
+        }
+      ],
+      "presets": {
+        "Default": "Normal",
+        "Relaxed": "Easy",
+        "Hard": "Normal",
+        "Survival": "Hard"
+      },
+      "description": "Strength of fish in the fishing minigame. Stronger fish take longer."
+    },
+    {
+      "key": "curseModifier",
+      "env": "SERVER_GS_CURSE_MODIFIER",
+      "label": "Curse Chance",
+      "tab": "survival",
+      "type": "enum",
+      "default": "Normal",
+      "options": [
+        {
+          "value": "Easy",
+          "label": "Off"
+        },
+        {
+          "value": "Normal",
+          "label": "Default"
+        },
+        {
+          "value": "Hard",
+          "label": "High"
+        }
+      ],
+      "presets": {
+        "Default": "Normal",
+        "Relaxed": "Easy",
+        "Hard": "Normal",
+        "Survival": "Hard"
+      },
+      "description": "Chance of being cursed by the Shroud when attacked. Hard doubles the chance; Off disables curses.",
+      "$verified": "Verified on a real server: server accepts only Easy/Normal/Hard, so mornedhels' 'Off' would stop the server. 'Easy' boots and shows 'Off' in game."
+    },
+    {
+      "key": "factoryProductionSpeedFactor",
+      "env": "SERVER_GS_FACTORY_PRODUCTION_SPEED_FACTOR",
+      "label": "Workshop Production Speed",
+      "tab": "resources",
+      "type": "factor",
+      "display": "percent",
+      "min": 0.25,
+      "max": 2,
+      "step": 0.05,
+      "default": 1,
+      "presets": {
+        "Default": 1,
+        "Relaxed": 2,
+        "Hard": 1,
+        "Survival": 1
+      },
+      "description": "Scales the speed of production for workshop items."
+    },
+    {
+      "key": "plantGrowthSpeedFactor",
+      "env": "SERVER_GS_PLANT_GROWTH_SPEED_FACTOR",
+      "label": "Plant Growth Speed",
+      "tab": "resources",
+      "type": "factor",
+      "display": "percent",
+      "min": 0.25,
+      "max": 2,
+      "step": 0.05,
+      "default": 1,
+      "presets": {
+        "Default": 1,
+        "Relaxed": 2,
+        "Hard": 1,
+        "Survival": 1
+      },
+      "description": "Scales plant growth speed."
+    },
+    {
+      "key": "perkCostFactor",
+      "env": "SERVER_GS_PERK_COST_FACTOR",
+      "label": "Weapon Upgrade Cost",
+      "tab": "resources",
+      "type": "factor",
+      "display": "percent",
+      "min": 0.25,
+      "max": 2,
+      "step": 0.05,
+      "default": 1,
+      "presets": {
+        "Default": 1,
+        "Relaxed": 0.5,
+        "Hard": 1,
+        "Survival": 1.25
+      },
+      "description": "Scales Runes required to upgrade weapons."
+    },
+    {
+      "key": "perkUpgradeRecyclingFactor",
+      "env": "SERVER_GS_PERK_UPGRADE_RECYCLING_FACTOR",
+      "label": "Weapon Upgrade Recycling Yield",
+      "tab": "resources",
+      "type": "factor",
+      "display": "percent",
+      "min": 0,
+      "max": 1,
+      "step": 0.05,
+      "default": 0.5,
+      "presets": {
+        "Default": 0.5,
+        "Relaxed": 1,
+        "Hard": 0.5,
+        "Survival": 0.3
+      },
+      "description": "Share of Runes returned when salvaging upgraded weapons.",
+      "$comment": "Default 0.5 confirmed by the shipped file, Keen's default JSON and the in-game Default column (50%)."
+    },
+    {
+      "key": "miningDamageFactor",
+      "env": "SERVER_GS_MINING_DAMAGE_FACTOR",
+      "label": "Mining Damage",
+      "tab": "resources",
+      "type": "factor",
+      "display": "percent",
+      "min": 0.5,
+      "max": 2,
+      "step": 0.05,
+      "default": 1,
+      "presets": {
+        "Default": 1,
+        "Relaxed": 1.5,
+        "Hard": 1,
+        "Survival": 0.75
+      },
+      "description": "Higher mining damage means more terraforming and more resources per hit."
+    },
+    {
+      "key": "resourceDropStackAmountFactor",
+      "env": "SERVER_GS_RESOURCE_DROP_STACK_AMOUNT_FACTOR",
+      "label": "Loot Amount",
+      "tab": "resources",
+      "type": "factor",
+      "display": "percent",
+      "min": 0.25,
+      "max": 2,
+      "step": 0.05,
+      "default": 1,
+      "presets": {
+        "Default": 1,
+        "Relaxed": 1.5,
+        "Hard": 1,
+        "Survival": 0.75
+      },
+      "description": "Scales materials per loot stack from chests, enemies, etc."
+    }
+  ],
+  "roles": {
+    "jsonKey": "userGroups",
+    "fields": [
+      {
+        "key": "name",
+        "type": "string",
+        "label": "Role name",
+        "required": true
+      },
+      {
+        "key": "password",
+        "type": "secret",
+        "label": "Password",
+        "description": "Players get this role by entering this password when joining"
+      },
+      {
+        "key": "canKickBan",
+        "type": "bool",
+        "label": "Kick / ban",
+        "default": false,
+        "description": "Kick and ban players"
+      },
+      {
+        "key": "canAccessInventories",
+        "type": "bool",
+        "label": "Access inventories",
+        "default": false,
+        "description": "Open chests and containers"
+      },
+      {
+        "key": "canEditWorld",
+        "type": "bool",
+        "label": "Edit world",
+        "default": false,
+        "description": "Change the world outside bases"
+      },
+      {
+        "key": "canEditBase",
+        "type": "bool",
+        "label": "Edit base",
+        "default": false,
+        "description": "Add, remove and terraform blocks and props in bases"
+      },
+      {
+        "key": "canExtendBase",
+        "type": "bool",
+        "label": "Extend base",
+        "default": false,
+        "description": "Create, upgrade and remove Flame Altars"
+      },
+      {
+        "key": "reservedSlots",
+        "type": "int",
+        "label": "Reserved slots",
+        "min": 0,
+        "max": 16,
+        "default": 0,
+        "description": "Slots held open for this role; the server looks full to other roles"
+      }
+    ],
+    "templates": {
+      "Admin": {
+        "canKickBan": true,
+        "canAccessInventories": true,
+        "canEditWorld": true,
+        "canEditBase": true,
+        "canExtendBase": true,
+        "reservedSlots": 0
+      },
+      "Friend": {
+        "canKickBan": false,
+        "canAccessInventories": true,
+        "canEditWorld": true,
+        "canEditBase": true,
+        "canExtendBase": false,
+        "reservedSlots": 0
+      },
+      "Guest": {
+        "canKickBan": false,
+        "canAccessInventories": false,
+        "canEditWorld": true,
+        "canEditBase": false,
+        "canExtendBase": false,
+        "reservedSlots": 0
+      },
+      "Visitor": {
+        "canKickBan": false,
+        "canAccessInventories": false,
+        "canEditWorld": false,
+        "canEditBase": false,
+        "canExtendBase": false,
+        "reservedSlots": 0
+      }
+    },
+    "$comment": "Templates match the four roles the server writes into a fresh enshrouded_server.json. The server generates random passwords of the form <RoleName><random chars>. Permission meanings (official): canEditWorld = change the world outside bases; canEditBase = add/remove/terraform blocks and props in bases; canExtendBase = create/upgrade/remove Flame Altars; canAccessInventories = open chests/containers; canKickBan = kick and ban players. reservedSlots keeps slots open for that role: the lobby looks full to other roles. No documented limit on role count or password rules."
+  },
+  "server": [
+    {
+      "key": "name",
+      "env": "SERVER_NAME",
+      "label": "Server name",
+      "type": "string",
+      "default": "Enshrouded Server"
+    },
+    {
+      "key": "slotCount",
+      "env": "SERVER_SLOT_COUNT",
+      "label": "Max players",
+      "type": "int",
+      "min": 1,
+      "max": 16,
+      "default": 16
+    },
+    {
+      "key": "queryPort",
+      "env": "SERVER_QUERYPORT",
+      "label": "Query port (UDP)",
+      "type": "int",
+      "min": 1024,
+      "max": 65535,
+      "default": 15637,
+      "recreate": true
+    },
+    {
+      "key": "ip",
+      "env": "SERVER_IP",
+      "label": "Bind IP",
+      "type": "string",
+      "default": "0.0.0.0"
+    },
+    {
+      "key": "enableVoiceChat",
+      "env": "SERVER_ENABLE_VOICE_CHAT",
+      "label": "Voice chat",
+      "type": "bool",
+      "default": false
+    },
+    {
+      "key": "voiceChatMode",
+      "env": "SERVER_VOICE_CHAT_MODE",
+      "label": "Voice chat mode",
+      "type": "enum",
+      "options": [
+        "Proximity",
+        "Global"
+      ],
+      "default": "Proximity",
+      "$comment": "Verified on a real server: accepted values are Global and Proximity."
+    },
+    {
+      "key": "enableTextChat",
+      "env": "SERVER_ENABLE_TEXT_CHAT",
+      "label": "Text chat",
+      "type": "bool",
+      "default": false
+    },
+    {
+      "key": "tags",
+      "label": "Server tags",
+      "type": "enum[]",
+      "default": [],
+      "options": [
+        "English",
+        "German",
+        "French",
+        "Italian",
+        "Japanese",
+        "Korean",
+        "Polish",
+        "Portuguese",
+        "Russian",
+        "Spanish",
+        "Thai",
+        "Turkish",
+        "Ukrainian",
+        "Chinese",
+        "Taiwanese",
+        "LookingForPlayers",
+        "BaseBuilding",
+        "Exploration",
+        "Roleplay"
+      ],
+      "description": "Server browser tags. Fixed list (DedicatedServerTagFlag); an unknown tag stops the server from booting. Verified on a real server, see docs/game-server-behavior.md."
+    }
+  ],
+  "presetDescriptions": {
+    "Default": "This is a balanced preset and is recommended as first time experience for most players. Enemy amount and difficulty is challenging but not overwhelming.",
+    "Relaxed": "This is the most relaxed and easiest preset. Enemy amount and difficulty are tuned down, while resource gain is increased. If you mainly love to build huge bases, this is the mode for you.",
+    "Hard": "If you love a challenging combat experience, this preset is for you. There are more enemies in the game world, they attack more often and deal more damage.",
+    "Survival": "Choose this difficulty if the “Hard” preset is too forgiving. In “Survival”, you will gain less XP and have lower health. Additional survival mechanics like hunger are introduced.",
+    "Custom": "Uses the individual values below. gameSettings is only applied when this preset is selected."
+  },
+  "preserveTopLevel": [
+    "tags",
+    "bannedAccounts",
+    "bans",
+    "saveDirectory",
+    "logDirectory"
+  ],
+  "legacyTopLevel": {
+    "password": "Deprecated. If present and non-empty, the server creates a role named 'default' with Friend-like permissions using it. The controller must never write it; on import, offer to convert it into a role and remove it."
+  }
+}

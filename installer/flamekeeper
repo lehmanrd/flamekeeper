@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+# flamekeeper: manage the FlameKeeper controller installed by install.sh.
+set -euo pipefail
+
+FK_REPO="__FK_REPO__"
+FK_INSTALL_DIR="${FK_INSTALL_DIR:-__FK_INSTALL_DIR__}"
+[[ "$FK_INSTALL_DIR" == __*__ ]] && FK_INSTALL_DIR=/opt/flamekeeper
+ENV_FILE="$FK_INSTALL_DIR/.env"
+
+die() {
+  printf 'flamekeeper: %s\n' "$*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<EOF
+Usage: flamekeeper <command>
+
+  status              Controller and game server status
+  logs [-f]           Controller logs (-f to follow)
+  start | stop | restart
+                      Start/stop/restart the controller. Game servers keep running.
+  update [--version v]
+                      Upgrade FlameKeeper (re-runs the installer, keeps settings)
+  doctor              Check Docker, ports, disk and the controller's self-check
+  uninstall [--purge] Remove the controller. --purge also deletes all game servers,
+                      saves and backups.
+  version             Show the installed version
+EOF
+}
+
+env_get() {
+  [[ -f "$ENV_FILE" ]] || return 0
+  sed -n "s/^$1=//p" "$ENV_FILE" | tail -n1
+}
+
+need_install() {
+  [[ -f "$FK_INSTALL_DIR/docker-compose.yml" ]] || die "not installed in $FK_INSTALL_DIR"
+}
+
+dk() {
+  if docker info >/dev/null 2>&1; then
+    docker "$@"
+  elif [[ "$(id -u)" -ne 0 ]] && command -v sudo >/dev/null 2>&1; then
+    sudo docker "$@"
+  else
+    die "can't reach Docker (is it running? are you root or in the docker group?)"
+  fi
+}
+
+compose() {
+  need_install
+  (cd "$FK_INSTALL_DIR" && dk compose "$@")
+}
+
+ui_url() {
+  local bind port base
+  bind="$(env_get FLAMEKEEPER_BIND)"
+  port="$(env_get FLAMEKEEPER_PORT)"
+  base="$(env_get BASE_PATH)"
+  [[ -z "$bind" || "$bind" == "0.0.0.0" ]] && bind=127.0.0.1
+  echo "http://${bind}:${port:-8080}${base%/}"
+}
+
+cmd_status() {
+  need_install
+  echo "Controller:"
+  compose ps --format '{{.Name}}  {{.State}}  {{.Status}}  {{.Image}}' 2>/dev/null | sed 's/^/  /' ||
+    compose ps
+  local health
+  if health="$(curl -fsS --max-time 3 "$(ui_url)/api/health" 2>/dev/null)"; then
+    echo "  API: ok ($(ui_url))"
+    case "$health" in
+      *'"setup_error":null'*) ;;
+      *) echo "  Setup problem: $(printf '%s' "$health" | sed -n 's/.*"setup_error":"\([^"]*\)".*/\1/p')" ;;
+    esac
+  else
+    echo "  API: not answering at $(ui_url)"
+  fi
+  echo
+  echo "Game servers:"
+  dk ps -a --filter label=flamekeeper.managed=true \
+    --format '  {{.Names}}  {{.Status}}  {{.Ports}}' | grep -v '^  $' || echo "  (none)"
+}
+
+cmd_update() {
+  local args=(--yes) url
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --version) args+=(--version "${2:?}"); shift ;;
+      *) die "unknown option $1" ;;
+    esac
+    shift
+  done
+  [[ "$FK_REPO" == __*__ ]] && die "this is a development install; re-run installer/install.sh from your checkout"
+  url="https://github.com/${FK_REPO}/releases/latest/download/install.sh"
+  if [[ "${args[*]}" == *--version* ]]; then
+    local v="${args[2]#v}"
+    url="https://github.com/${FK_REPO}/releases/download/v${v}/install.sh"
+  fi
+  echo "Downloading $url"
+  local tmp
+  tmp="$(mktemp)"
+  curl -fsSL "$url" -o "$tmp" || die "download failed"
+  FK_INSTALL_DIR="$FK_INSTALL_DIR" bash "$tmp" "${args[@]}"
+  rm -f "$tmp"
+}
+
+cmd_doctor() {
+  local rc=0 data_dir free_gb
+  echo "Docker:"
+  if dk version --format '  engine {{.Server.Version}}, API {{.Server.APIVersion}}' 2>/dev/null; then :; else
+    echo "  NOT REACHABLE"; rc=1
+  fi
+  dk compose version 2>/dev/null | sed 's/^/  /' || { echo "  compose plugin missing"; rc=1; }
+  data_dir="$(env_get DATA_DIR)"
+  if [[ -n "$data_dir" && -d "$data_dir" ]]; then
+    free_gb="$(df -Pk "$data_dir" | awk 'NR==2 {print int($4/1024/1024)}')"
+    echo "Disk: ${free_gb} GB free in $data_dir"
+  fi
+  echo "Self-check:"
+  local system
+  if system="$(curl -fsS --max-time 10 -X POST "$(ui_url)/api/system/selfcheck" 2>/dev/null)"; then
+    printf '%s\n' "$system" | tr '{' '\n' |
+      sed -n 's/.*"label":"\([^"]*\)","status":"\([^"]*\)","detail":"\([^"]*\)".*/  [\2] \1: \3/p'
+    case "$system" in *'"fatal_error":null'*) ;; *) rc=1 ;; esac
+  else
+    echo "  controller not answering at $(ui_url)"; rc=1
+  fi
+  return "$rc"
+}
+
+cmd_uninstall() {
+  local purge=0 data_dir answer
+  [[ "${1:-}" == "--purge" ]] && purge=1
+  [[ "$(id -u)" -eq 0 ]] || die "run as root (sudo flamekeeper uninstall)"
+  data_dir="$(env_get DATA_DIR)"
+  if [[ "$purge" == 1 ]]; then
+    echo "This deletes EVERYTHING FlameKeeper manages:"
+    dk ps -a --filter label=flamekeeper.managed=true --format '  container {{.Names}}'
+    [[ -n "$data_dir" ]] && echo "  data      $data_dir (worlds, saves, backups)"
+    printf 'Type "flamekeeper" to confirm: '
+    read -r answer </dev/tty
+    [[ "$answer" == "flamekeeper" ]] || die "aborted"
+  fi
+  [[ -f "$FK_INSTALL_DIR/docker-compose.yml" ]] && compose down || true
+  if [[ "$purge" == 1 ]]; then
+    local ids=()
+    mapfile -t ids < <(dk ps -aq --filter label=flamekeeper.managed=true)
+    [[ ${#ids[@]} -gt 0 ]] && dk rm -f "${ids[@]}" >/dev/null
+    dk network rm flamekeeper >/dev/null 2>&1 || true
+    [[ -n "$data_dir" && "$data_dir" != "/" ]] && rm -rf "$data_dir"
+  fi
+  rm -rf "$FK_INSTALL_DIR"
+  rm -f "$0"
+  echo "FlameKeeper removed."
+  if [[ "$purge" == 0 ]]; then
+    echo "Game servers keep running and your data is still in ${data_dir:-the data folder}."
+    echo "Re-run the installer to manage them again, or remove them with:"
+    echo "  docker rm -f \$(docker ps -aq --filter label=flamekeeper.managed=true)"
+  fi
+}
+
+main() {
+  local cmd="${1:-}"
+  [[ $# -gt 0 ]] && shift
+  case "$cmd" in
+    status) cmd_status ;;
+    logs) compose logs --tail 200 "$@" ;;
+    start) compose up -d ;;
+    stop) compose stop ;;
+    restart) compose up -d --force-recreate ;;
+    update) cmd_update "$@" ;;
+    doctor) cmd_doctor ;;
+    uninstall) cmd_uninstall "$@" ;;
+    version) env_get FLAMEKEEPER_IMAGE | sed 's/.*://' ;;
+    "" | -h | --help | help) usage ;;
+    *) usage >&2; exit 2 ;;
+  esac
+}
+
+main "$@"

@@ -1,0 +1,20 @@
+# Written by the FlameKeeper installer. Settings live in .env next to this file;
+# re-running the installer (or `flamekeeper update`) rewrites this file.
+name: flamekeeper
+services:
+  flamekeeper:
+    image: ${FLAMEKEEPER_IMAGE}
+    container_name: flamekeeper
+    restart: unless-stopped
+    ports:
+      - "${FLAMEKEEPER_BIND}:${FLAMEKEEPER_PORT}:8080"
+    volumes:
+      - ${DOCKER_SOCK}:/var/run/docker.sock
+      # Same path inside and outside: game containers are created through the
+      # host's Docker, which needs host paths.
+      - ${DATA_DIR}:${DATA_DIR}
+    environment:
+      - DATA_DIR=${DATA_DIR}
+      - TZ=${TZ}
+      - BASE_PATH=${BASE_PATH}
+    stop_grace_period: 30s

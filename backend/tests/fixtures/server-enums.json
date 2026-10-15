@@ -1,0 +1,80 @@
+{
+  "aggroPoolAmount": {
+    "enum": "AggroPoolAmount",
+    "values": [
+      "Few",
+      "Normal",
+      "Many",
+      "Extreme"
+    ]
+  },
+  "randomSpawnerAmount": {
+    "enum": "RandomSpawnerAmount",
+    "values": [
+      "Few",
+      "Normal",
+      "Many",
+      "Extreme"
+    ]
+  },
+  "tombstoneMode": {
+    "enum": "TombstoneMode",
+    "values": [
+      "AddBackpackMaterials",
+      "Everything",
+      "NoTombstone"
+    ]
+  },
+  "weatherFrequency": {
+    "enum": "WeatherFrequency",
+    "values": [
+      "Disabled",
+      "Rare",
+      "Normal",
+      "Often"
+    ]
+  },
+  "tamingStartleRepercussion": {
+    "enum": "TamingStartleRepercussion",
+    "values": [
+      "KeepProgress",
+      "LoseSomeProgress",
+      "LoseAllProgress"
+    ]
+  },
+  "fishingDifficulty": {
+    "enum": "GenericDifficulty",
+    "values": [
+      "VeryEasy",
+      "Easy",
+      "Normal",
+      "Hard",
+      "VeryHard"
+    ]
+  },
+  "curseModifier": {
+    "enum": "CurseModifier",
+    "values": [
+      "Easy",
+      "Normal",
+      "Hard"
+    ]
+  },
+  "voiceChatMode": {
+    "enum": "VoiceChatMode",
+    "values": [
+      "Global",
+      "Proximity"
+    ]
+  },
+  "gameSettingsPreset": {
+    "enum": "GameSettingsPreset",
+    "values": [
+      "Default",
+      "Relaxed",
+      "Hard",
+      "Survival",
+      "Custom"
+    ]
+  }
+}

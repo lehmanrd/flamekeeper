@@ -1,0 +1,38 @@
+# Regexes applied to game container log lines (docker logs).
+# Samples: docs/game-server-behavior.md. Lines arrive prefixed by supervisord, e.g.
+#   2026-10-14 19:55:47.419 supervisord: enshrouded-server [Session] 'HostOnline' (up)!
+
+host_online: "\\[Session\\] 'HostOnline' \\(up\\)!"
+server_process_start: "enshrouded-server INFO - Running enshrouded-server"
+server_shutdown: "enshrouded-server INFO - Shutdown complete"
+server_saved: "\\[server\\] Saved$"
+
+# steamcmd, from the image's enshrouded-updater program.
+steam_progress: "Update state \\(0x[0-9a-fA-F]+\\) (?P<phase>[a-z ]+), progress: (?P<pct>[0-9.]+) \\((?P<done>\\d+) / (?P<total>\\d+)\\)"
+steam_update_start: "enshrouded-updater INFO - Running enshrouded-updater"
+steam_success: "Success! App '2278520' fully installed"
+
+# Verified with a real client (docs/game-server-behavior.md, Log lines).
+player_joined: "\\[server\\] Player '(?P<name>.+)' logged in with Permissions:"
+player_left: "\\[server\\] Remove Player '(?P<name>.+)'$"
+
+# Failures. {name} placeholders in title/hint are filled from the regex groups.
+failures:
+  - pattern: "Failed to parse enum '(?P<enum>[^:']+): Invalid value '(?P<value>[^']*)'"
+    title: "Invalid value '{value}' in enshrouded_server.json ({enum})"
+    hint: "The server refuses to boot with an unknown option value. Fix the setting in FlameKeeper or restore an earlier config revision."
+  - pattern: "Internal Error: Failed to parse Config"
+    title: "The server could not parse enshrouded_server.json"
+    hint: "The file has an invalid value. Check the lines just before this one in the log."
+  - pattern: "App '2278520' state is 0x202 after update job"
+    title: "Update failed: permissions or disk space"
+    hint: "Check that the world's game directory is owned by PUID:PGID and that there is free disk space of at least twice the game size."
+  - pattern: "App '2278520' state is 0x6 after update job"
+    title: "Update failed: no content server or broken app manifest"
+    hint: "Run a forced update from the Updates page."
+  - pattern: "wine: could not load kernel32\\.dll"
+    title: "Wine/Proton could not start the server"
+    hint: "The Proton prefix in steamapps/compatdata is broken (for example copied without its symlinks). Use Force update on the Updates page to rebuild it."
+  - pattern: "gave up: enshrouded-server entered FATAL state"
+    title: "The server keeps exiting right after it starts"
+    hint: "Supervisor gave up after several quick restarts. The log lines just before this one show why."

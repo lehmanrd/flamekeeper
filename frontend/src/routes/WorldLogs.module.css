@@ -1,0 +1,18 @@
+.log {
+  background: #0d0f1a;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  height: calc(100vh - 230px);
+  min-height: 320px;
+  overflow: auto;
+  font: 12px/1.6 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ts { color: var(--muted); }
+.src { color: var(--info); opacity: 0.8; }
+.info { color: var(--text); }
+.warn { color: var(--warn); }
+.error { color: var(--bad); }
+.player { color: var(--ok); }
