@@ -151,7 +151,15 @@ prefix.
 
 ## Savegames
 
-`savegame/` holds one world slot, `3ad85aea` (8 hex characters), plus rolling older copies
+**Game 1.0 changed the format.** The save is `savegame/world0.ksd`, with rolling copies in
+`savegame/backup/world0.ksd.backup-N`. On a world's first 1.0 boot the server converts the
+old save and moves the old files into `savegame/migrated/`. FlameKeeper backs up and
+restores the whole folder, including `backup/` and `migrated/`; when it looks for the save
+folder in a zip, `world0.ksd` (or old files outside `migrated/` and `backup/`) marks it.
+FlameKeeper 0.4.0 and older picked `migrated/` instead, so restoring a backup made after
+the update would have brought back the pre-1.0 world.
+
+Before 1.0, `savegame/` held one world slot, `3ad85aea` (8 hex characters), plus rolling older copies
 `3ad85aea-1` … `3ad85aea-9` and `3ad85aea-index`, which points at the latest. The server
 saves about every 5 minutes and writes a new copy about every 10, even with nobody online.
 A fresh world is about 20 KB. Characters are stored on the players' PCs, not on the server.

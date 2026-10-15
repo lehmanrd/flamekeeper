@@ -32,9 +32,15 @@ MAX_UNCOMPRESSED_BYTES = 50 * 1024**3
 MAX_ENTRIES = 10_000
 MAX_RATIO = 200
 
-# Enshrouded save files: a world slot (8 hex chars), its rolling versions (-1 … -9) and
-# its index, e.g. 3ad85aea, 3ad85aea-4, 3ad85aea-index. See docs/game-server-behavior.md.
-SAVE_FILE_RE = re.compile(r"^[0-9a-f]{8}(?:-\d+|-index|_info)?$")
+# Enshrouded save files (docs/game-server-behavior.md). Before game 1.0: a world slot
+# (8 hex chars), its rolling versions (-1 … -9) and its index, e.g. 3ad85aea, 3ad85aea-4,
+# 3ad85aea-index. From 1.0: world0.ksd, with rolling copies in backup/world0.ksd.backup-N;
+# the first 1.0 boot moves the old files into migrated/.
+SAVE_FILE_RE = re.compile(r"^(?:[0-9a-f]{8}(?:-\d+|-index|_info)?|world\d+\.ksd(?:\.backup-\d+)?)$")
+# The files that mark a folder as the save folder (not the rolling copies).
+_MAIN_SAVE_RE = re.compile(r"^(?:[0-9a-f]{8}|[0-9a-f]{8}-index|world\d+\.ksd)$")
+# Folders the game keeps inside the save folder.
+_SAVE_SUBDIRS = ("backup", "migrated")
 
 
 class ArchiveError(Exception):
@@ -139,7 +145,7 @@ def inspect_zip(path: Path, *, trusted: bool = False) -> ZipSummary:
         if len(infos) > MAX_ENTRIES:
             raise ArchiveError(f"The zip has {len(infos)} entries; at most {MAX_ENTRIES}")
         total = 0
-        saves: dict[str, list[str]] = {}
+        saves: list[PurePosixPath] = []
         manifest = None
         has_config = False
         for info in infos:
@@ -162,26 +168,40 @@ def inspect_zip(path: Path, *, trusted: bool = False) -> ZipSummary:
             elif p.name == CONFIG_NAME and len(p.parts) == 1:
                 has_config = True
             elif SAVE_FILE_RE.match(p.name):
-                saves.setdefault(str(p.parent) if str(p.parent) != "." else "", []).append(
-                    info.filename)
+                saves.append(p)
         if total > MAX_UNCOMPRESSED_BYTES:
             raise ArchiveError("The zip is too large once extracted")
-        if not saves:
-            raise ArchiveError("No Enshrouded save files found (expected files like "
-                               "3ad85aea and 3ad85aea-index)")
-        if len(saves) > 1:
-            if SAVE_DIR in saves:
-                prefix = SAVE_DIR
-            else:
-                raise ArchiveError("Save files were found in more than one folder: "
-                                   + ", ".join(sorted(p or "(top level)" for p in saves)))
-        else:
-            prefix = next(iter(saves))
-        summary = ZipSummary(prefix, sorted(saves[prefix]), has_config, manifest, total,
+        prefix = _save_folder(saves)
+        in_folder = [p for p in saves if p.parts[: len(prefix.parts)] == prefix.parts]
+        summary = ZipSummary("" if str(prefix) == "." else str(prefix),
+                             sorted(str(p) for p in in_folder), has_config, manifest, total,
                              len(infos))
-        if not any(f.endswith("-index") for f in summary.save_files):
+        top = [p.name for p in in_folder if p.parent == prefix]
+        legacy = any(re.match(r"^[0-9a-f]{8}$", n) for n in top)
+        if legacy and not any(n.endswith("-index") for n in top):
             summary.warnings.append("No -index file: the server may not find the latest save")
         return summary
+
+
+def _save_folder(saves: list[PurePosixPath]) -> PurePosixPath:
+    """The folder holding the world save. Since game 1.0 the save folder also contains
+    backup/ and migrated/ (the pre-1.0 files); those belong to it rather than being
+    save folders of their own."""
+    folders = {p.parent for p in saves if _MAIN_SAVE_RE.match(p.name)}
+    if not folders:
+        folders = {p.parent for p in saves}
+    folders = {f for f in folders
+               if not (f.name in _SAVE_SUBDIRS and f.parent in folders)}
+    if not folders:
+        raise ArchiveError("No Enshrouded save files found (expected files like "
+                           "world0.ksd, or 3ad85aea and 3ad85aea-index)")
+    if len(folders) > 1:
+        if PurePosixPath(SAVE_DIR) in folders:
+            return PurePosixPath(SAVE_DIR)
+        raise ArchiveError("Save files were found in more than one folder: "
+                           + ", ".join(sorted(str(f) if str(f) != "." else "(top level)"
+                                              for f in folders)))
+    return next(iter(folders))
 
 
 def extract_saves(path: Path, summary: ZipSummary, savegame: Path) -> list[Path]:

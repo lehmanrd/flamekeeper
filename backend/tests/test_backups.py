@@ -75,6 +75,46 @@ def test_inspect_accepts_flat_and_nested_layouts(tmp_path: Path) -> None:
     assert s.warnings == ["No -index file: the server may not find the latest save"]
 
 
+# The save folder after a world's first boot on game 1.0 (as seen on a real server).
+SAVE_1_0 = {
+    "world0.ksd": b"the 1.0 world",
+    "backup/world0.ksd.backup-9": b"a rolling copy",
+    "migrated/3ad85aea": b"the world before 1.0",
+    "migrated/3ad85aea-1": b"older",
+    "migrated/3ad85aea-index": b"{}",
+}
+
+
+def test_game_1_0_backup_restores_the_current_world(tmp_path: Path) -> None:
+    """Not the pre-1.0 files the game moved into migrated/."""
+    src = tmp_path / "savegame"
+    for name, data in SAVE_1_0.items():
+        (src / name).parent.mkdir(parents=True, exist_ok=True)
+        (src / name).write_bytes(data)
+    dest = tmp_path / "b.zip"
+    archive.write_backup(dest, src, b"{}", {"kind": "manual"})
+    s = archive.inspect_zip(dest)
+    assert s.save_prefix == "savegame" and not s.warnings
+    assert "savegame/world0.ksd" in s.save_files and len(s.save_files) == 5
+
+    target = tmp_path / "restore" / "savegame"
+    target.mkdir(parents=True)
+    (target / "world0.ksd").write_bytes(b"newer world")
+    archive.extract_saves(dest, s, target)
+    assert (target / "world0.ksd").read_bytes() == b"the 1.0 world"
+    assert (target / "backup" / "world0.ksd.backup-9").exists()
+    assert (target / "migrated" / "3ad85aea").exists()
+
+
+@pytest.mark.parametrize("prefix", ["", "MyWorld/savegame/"])
+def test_inspect_finds_1_0_saves_in_uploads(tmp_path: Path, prefix: str) -> None:
+    s = archive.inspect_zip(_zip({prefix + k: v for k, v in SAVE_1_0.items()},
+                                 tmp_path / "up.zip"))
+    assert s.save_prefix == prefix.rstrip("/") and not s.warnings
+    just_world = archive.inspect_zip(_zip({"world0.ksd": b"w"}, tmp_path / "w.zip"))
+    assert just_world.save_prefix == "" and not just_world.warnings
+
+
 @pytest.mark.parametrize("entries,error", [
     ({"../evil": b"x", "3ad85aea": b"w"}, "Unsafe path"),
     ({"/etc/passwd": b"x"}, "Unsafe path"),
