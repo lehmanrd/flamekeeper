@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -265,3 +266,21 @@ def test_spa_fallback_and_base_path(tmp_path: Path, fake_docker: FakeDockerAdapt
         assert c.get("/fk/api/health").json()["status"] == "ok"
         assert c.get("/fk/api/nope").status_code == 404
         assert c.get("/", follow_redirects=False).headers["location"] == "/fk/"
+
+
+def test_restarts_by_flamekeeper_are_not_a_crash_loop(client: TestClient) -> None:
+    """Several starts in a few minutes, all asked for, then a container restart: the
+    server is online, not crash-looping."""
+    world = _create(client)
+    wid = world["id"]
+    for _ in range(2):
+        assert wait_job(client, client.post(f"/api/worlds/{wid}/stop", json={}).json()
+                        ["job_id"])["status"] == "succeeded"
+        assert wait_job(client, client.post(f"/api/worlds/{wid}/start").json()
+                        ["job_id"])["status"] == "succeeded"
+    for mode in ("process", "container"):
+        job = client.post(f"/api/worlds/{wid}/restart", json={"mode": mode}).json()
+        assert wait_job(client, job["job_id"])["status"] == "succeeded"
+    assert wait_for(lambda: client.get(f"/api/worlds/{wid}").json()["state"] == "online")
+    time.sleep(0.5)
+    assert client.get(f"/api/worlds/{wid}").json()["state"] == "online"

@@ -213,6 +213,13 @@ installer/tests/e2e-self-update.sh                  # same, then updates from th
 docker build -t flamekeeper:dev .
 ```
 
+The **Game server** workflow (`.github/workflows/game-server.yml`) installs a release on a
+GitHub runner and runs a real Enshrouded server through it: download, online, settings
+readme vs the schema, backup, restore, restart, stop. It runs after each release, every
+Monday against the latest release, and on demand (Actions → Game server → Run workflow;
+version `checkout` tests the branch instead of a release). The API part is
+`scripts/ci/game_server_test.py`, which works against any FlameKeeper.
+
 ### Releasing
 
 Push a tag `vX.Y.Z`. The release workflow builds `ghcr.io/<owner>/flamekeeper:X.Y.Z` (and

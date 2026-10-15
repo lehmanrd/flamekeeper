@@ -34,6 +34,9 @@ log = logging.getLogger(__name__)
 POLL_INTERVAL_S = 10.0
 # A player who just logged in may not be counted by A2S yet.
 SESSION_GRACE = timedelta(seconds=60)
+# A requested start whose start line hasn't appeared by then (first boots download the
+# game first) no longer excuses the next start from crash-loop detection.
+EXPECTED_START_TTL = timedelta(minutes=45)
 A2S_TIMEOUT_S = 3.0
 
 
@@ -57,7 +60,10 @@ class Runtime:
     update_progress: float | None = None
     recent_starts: deque[datetime] = field(default_factory=lambda: deque(maxlen=20))
     # Starts requested by the user; these don't count towards crash-loop detection.
+    # expected_since: when the oldest of them was requested. A container start's log is
+    # read from the container's start, so its start line usually arrives as a replay.
     expected_starts: int = 0
+    expected_since: datetime | None = None
     last_failure: dict[str, Any] | None = None
     # Consecutive A2S polls that reported 0 players (closes sessions the log missed).
     zero_polls: int = 0
@@ -123,6 +129,8 @@ class Monitor:
         rt = self.runtime(world_id)
         rt.host_online_seen = False
         rt.a2s_ok = False
+        if rt.expected_starts == 0:
+            rt.expected_since = datetime.now(UTC)
         rt.expected_starts += 1
 
     def runtime(self, world_id: str) -> Runtime:
@@ -309,8 +317,13 @@ class Monitor:
             rt.host_online_seen = False
             rt.a2s_ok = False
             rt.update_running = False
-            if live and rt.expected_starts > 0:
+            if rt.expected_since and now - rt.expected_since > EXPECTED_START_TTL:
+                rt.expected_starts, rt.expected_since = 0, None  # that start never came
+            if rt.expected_starts > 0 and (live or (rt.expected_since is not None
+                                                    and now >= rt.expected_since)):
                 rt.expected_starts -= 1
+                if rt.expected_starts == 0:
+                    rt.expected_since = None
             else:
                 rt.recent_starts.append(now)
             if live:
