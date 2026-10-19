@@ -549,11 +549,17 @@ class ConfigService:
 
     def apply_document(self, world: World, doc: dict[str, Any], *,
                        base_revision: int | None = None, source: str, note: str = "",
-                       keep_name: bool = False) -> SaveResult:
+                       keep_name: bool = False,
+                       convert_legacy_password: bool = False) -> SaveResult:
         """Save preset, game settings, server fields and roles (with their passwords)
         from a whole document, e.g. a history revision or the config inside a backup.
-        The port, bind address, ban list and unknown keys of the current file stay."""
+        The port, bind address, ban list and unknown keys of the current file stay.
+        `convert_legacy_password` turns a top-level `password` into a role, so a server
+        imported from an old config keeps needing a password."""
         roles = _roles(doc)
+        legacy = doc.get("password")
+        if convert_legacy_password and isinstance(legacy, str) and legacy and legacy != MASK:
+            roles = [*roles, {**_legacy_role(), "password": legacy}]
         server = {k: doc[k] for k in EDITABLE_SERVER_FIELDS if k in doc}
         if keep_name:
             server.pop("name", None)

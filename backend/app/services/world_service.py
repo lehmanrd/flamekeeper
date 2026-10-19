@@ -108,6 +108,9 @@ class CreateWorldInput:
     start: bool = True
     # Copy game files from this world instead of downloading them (~9 GB).
     copy_game_from: str | None = None
+    # A port that is in use on the host now but will be free before the first start
+    # (an imported server that the import stops).
+    reusable_port: int | None = None
 
 
 def _chown_tree(path: Path, uid: int, gid: int) -> None:
@@ -259,7 +262,8 @@ class WorldService:
             raise WorldError("Query port must be between 1024 and 65535")
         elif any(w.query_port == port for w in worlds):
             raise WorldError(f"Port {port} is already used by another world", 409)
-        elif port in await host_udp_ports_in_use(self.docker, self.settings):
+        elif port != data.reusable_port and \
+                port in await host_udp_ports_in_use(self.docker, self.settings):
             raise WorldError(f"UDP port {port} is already in use on the host", 409)
         if data.roles is not None:
             problems = validate_roles(data.roles, data.slot_count)
@@ -295,6 +299,7 @@ class WorldService:
             update_policy=data.update_policy,
             start=data.start,
             copy_game_from=data.copy_game_from,
+            reusable_port=data.reusable_port,
         )
 
     async def preview(self, data: CreateWorldInput) -> dict[str, Any]:

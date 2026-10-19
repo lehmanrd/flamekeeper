@@ -6,6 +6,7 @@ import type { WorldEvent, WorldSummary } from "../api/types";
 import { useJobFocus } from "../components/JobsDrawer";
 import { CloneDialog } from "../components/CloneDialog";
 import { ConfigBanners } from "../components/ConfigBanners";
+import { ImportCleanup } from "../components/ImportCleanup";
 import { WorldCharts } from "../components/WorldCharts";
 import { Modal } from "../components/Modal";
 import { StatusPill } from "../components/StatusPill";
@@ -28,6 +29,9 @@ export const EVENT_TONE: Record<string, string> = {
   warning: "warn",
   created: "info",
   adopted: "info",
+  imported: "info",
+  import_rolled_back: "bad",
+  import_cleanup: "off",
   player_joined: "ok",
   player_left: "off",
   backup_created: "ok",
@@ -50,6 +54,9 @@ export function eventDetail(e: WorldEvent): string {
   if (d.mode) return `${d.mode} restart`;
   if (d.port) return `port ${d.port}`;
   if (d.filename) return String(d.filename);
+  if (d.source) return `from ${d.source}`;
+  if (d.container) return `removed container ${d.container}`;
+  if (Array.isArray(e.data.volumes)) return `removed volumes ${(e.data.volumes as string[]).join(", ") || "(none)"}`;
   return "";
 }
 
@@ -95,6 +102,7 @@ function WorldOverviewInner({ world }: { world: WorldSummary }) {
         </div>
       )}
       <ConfigBanners world={world} />
+      <ImportCleanup world={world} />
       {(world.game_update_available || world.image_update_available) && (
         <div className="banner warn">
           <span>

@@ -321,7 +321,7 @@ export interface SettingsReadmeReport {
 
 /* ---------- backups ---------- */
 
-export type BackupKind = "scheduled" | "manual" | "pre-update" | "pre-restore" | "pre-image-update" | "uploaded" | "image";
+export type BackupKind = "scheduled" | "manual" | "pre-update" | "pre-restore" | "pre-image-update" | "uploaded" | "image" | "imported";
 
 export interface BackupItem {
   id: string;
@@ -508,4 +508,81 @@ export interface NotificationSettings {
   discord_webhook: string;
   events: string[];
   available: { id: string; label: string; default: boolean }[];
+}
+
+export interface ImportCandidate {
+  id: string;
+  name: string;
+  image: string;
+  status: string;
+  running: boolean;
+  /** Looks like an Enshrouded server (image name, ports or mounts). */
+  likely: boolean;
+  ports: Record<string, number[]>;
+  mounts: { type: string; name: string | null; source: string; destination: string }[];
+  restart_policy: string;
+  /** Slug of the world it was already imported into. */
+  imported_into: string | null;
+}
+
+export interface ImportScan {
+  token: string;
+  created_at: string;
+  source:
+    | { kind: "container"; container_id: string; container_name: string; image: string; label: string }
+    | { kind: "host_path"; host_path: string; label: string }
+    | { kind: "upload"; filename: string; label: string };
+  config_path: string | null;
+  save_path: string | null;
+  save_options: string[];
+  summary: {
+    has_config: boolean;
+    name: string | null;
+    slot_count: number | null;
+    query_port: number | null;
+    preset: string | null;
+    custom_settings: number;
+    roles: { name: string; has_password: boolean; reserved_slots: number }[];
+    legacy_password: boolean;
+    bans: number;
+    save_format: "1.0" | "pre-1.0";
+    save_files: number;
+    save_bytes: number;
+    saved_at: string | null;
+  };
+  warnings: string[];
+  /** Problems that block the import. */
+  errors: string[];
+  port: number;
+  /** The old server holds this port now; the import stops it first. */
+  reusable_port: number | null;
+  running: boolean;
+  players_online: number | null;
+  auto_remove?: boolean;
+  restart_policy?: string;
+  volumes?: string[];
+  bind_sources?: string[];
+}
+
+export interface ImportCreateBody {
+  display_name: string;
+  slug?: string;
+  query_port?: number;
+  image_tag?: string;
+  backup?: { enabled: boolean; cron: string; retention_count: number };
+  start?: boolean;
+  copy_game_from?: string;
+  save_path?: string;
+  confirm_players?: boolean;
+}
+
+export interface WorldImportInfo {
+  state: "importing" | "imported" | "rolled_back" | "container_removed" | "volumes_removed" | "dismissed";
+  source_kind: "container" | "host_path" | "upload";
+  source_label: string;
+  image: string;
+  volumes: string[];
+  bind_sources: string[];
+  container: { name: string; status: string; running: boolean; restart_policy: string } | null;
+  created_at: string;
 }

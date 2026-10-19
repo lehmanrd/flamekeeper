@@ -6,6 +6,7 @@ import { BASE } from "./api/client";
 import { AuthGate } from "./components/AuthGate";
 import { JobsProvider } from "./components/JobsDrawer";
 import { Layout } from "./components/Layout";
+import { ImportWorld } from "./routes/ImportWorld";
 import { NewWorld } from "./routes/NewWorld";
 import { NotFound } from "./routes/NotFound";
 import { Overview } from "./routes/Overview";
@@ -32,6 +33,7 @@ const router = createBrowserRouter(
       children: [
         { index: true, element: <Overview /> },
         { path: "new", element: <NewWorld /> },
+        { path: "import", element: <ImportWorld /> },
         { path: "worlds/:slug", element: <WorldOverview /> },
         { path: "worlds/:slug/difficulty", element: <WorldDifficulty /> },
         { path: "worlds/:slug/server", element: <WorldServer /> },

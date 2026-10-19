@@ -23,6 +23,7 @@ export const KIND_LABEL: Record<BackupKind, string> = {
   "pre-image-update": "before image update",
   uploaded: "uploaded",
   image: "image",
+  imported: "imported",
 };
 
 export const KIND_TONE: Record<BackupKind, "ok" | "info" | "warn" | "off"> = {
@@ -33,6 +34,7 @@ export const KIND_TONE: Record<BackupKind, "ok" | "info" | "warn" | "off"> = {
   "pre-image-update": "warn",
   uploaded: "ok",
   image: "off",
+  imported: "ok",
 };
 
 export function totalSize(backups: BackupItem[]): number {

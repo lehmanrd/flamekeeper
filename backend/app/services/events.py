@@ -30,6 +30,9 @@ EVENT_KINDS = {
     "warning",
     "created",
     "adopted",
+    "imported",
+    "import_rolled_back",
+    "import_cleanup",
 }
 
 

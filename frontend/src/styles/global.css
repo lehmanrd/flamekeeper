@@ -322,6 +322,8 @@ ol.timeline .what { min-width: 0; overflow-wrap: anywhere; }
 .ok-text { color: var(--ok); font-size: 13px; }
 table.wizard-roles td { padding: 6px; }
 @media (max-width: 700px) { .preset-cards { grid-template-columns: 1fr; } }
+.preset-cards.import-list { grid-template-columns: 1fr; }
+.preset-card .pill { vertical-align: middle; font-family: var(--font-body); }
 
 /* Sign-in and first setup */
 .auth-page { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; background: var(--bg); }

@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api import auth as auth_api
 from app.api import backups as backups_api
 from app.api import config as config_api
+from app.api import imports as imports_api
 from app.api import jobs as jobs_api
 from app.api import stream as stream_api
 from app.api import system as system_api
@@ -66,6 +67,7 @@ async def startup(services: Services) -> None:
         return
     services.worlds.ntsync_available = services.selfcheck.ntsync_available
     await _join_game_network(services)
+    await services.imports.recover_interrupted()
     await services.worlds.reconcile()
     services.monitor.start()
     services.scheduler.start()
@@ -117,7 +119,7 @@ def create_app(
     _require_csrf_header(app, settings)
     api = APIRouter(prefix=f"{settings.base_path}/api", dependencies=[Depends(current_user)])
     for module in (system_api, worlds_api, config_api, backups_api, updates_api, jobs_api,
-                   stream_api):
+                   stream_api, imports_api):
         api.include_router(module.router)
     app.include_router(api)
     # Sign-in and first setup work without a session.

@@ -106,6 +106,30 @@ The installed build comes from `current_version` when it exists, otherwise from 
 manifest. The first install downloads about 8.8 GB and takes about 3 minutes to reach
 `HostOnline` on a typical host.
 
+## Servers from other images
+
+Importing (`backend/app/services/import_service.py`) finds a server by its files, since
+images differ in where they keep them. The sknnr row is from that image's documentation and
+hasn't been checked against a real container; the importer doesn't depend on either layout:
+
+| Image | Install / config | Savegame |
+|---|---|---|
+| `mornedhels/enshrouded-server` | `/opt/enshrouded/server/enshrouded_server.json` | `/opt/enshrouded/server/savegame` (the whole `/opt/enshrouded` is usually one mount) |
+| `sknnr/enshrouded-dedicated-server` | `/home/steam/enshrouded/enshrouded_server.json`, written from env vars on start, **not** in a volume | `/home/steam/enshrouded/savegame` (the volume) |
+
+So the importer runs `find` over the container's mounts in a busybox helper started with
+`--volumes-from`, which works on stopped containers too. That finds the save folder, and the
+config when it's in a mount. Otherwise it reads `enshrouded_server.json` next to the save
+folder, or in a few known install folders, with `docker cp` (`get_archive`), which also
+reaches the container's own files. Images that build the config from environment variables
+have written them into the file on their last start, so the file is the full picture. The
+save folder comes from the config's `saveDirectory`, relative to the config's folder (the
+server's working directory).
+
+A folder on the host is read through a helper with the host's `/` mounted read-only at
+`/host`, not by mounting the folder itself: Docker creates a missing bind-mount source as
+an empty folder on the host.
+
 ## Game updates
 
 On every container start the image runs `enshrouded-updater`. It compares

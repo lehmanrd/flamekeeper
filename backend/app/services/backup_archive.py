@@ -16,6 +16,7 @@ import json
 import os
 import re
 import shutil
+import tarfile
 import tempfile
 import zipfile
 from dataclasses import dataclass, field
@@ -183,15 +184,22 @@ def inspect_zip(path: Path, *, trusted: bool = False) -> ZipSummary:
         return summary
 
 
-def _save_folder(saves: list[PurePosixPath]) -> PurePosixPath:
-    """The folder holding the world save. Since game 1.0 the save folder also contains
+def is_main_save(name: str) -> bool:
+    return bool(_MAIN_SAVE_RE.match(name))
+
+
+def save_folders(saves: list[PurePosixPath]) -> set[PurePosixPath]:
+    """The folders holding a world save. Since game 1.0 the save folder also contains
     backup/ and migrated/ (the pre-1.0 files); those belong to it rather than being
     save folders of their own."""
     folders = {p.parent for p in saves if _MAIN_SAVE_RE.match(p.name)}
     if not folders:
         folders = {p.parent for p in saves}
-    folders = {f for f in folders
-               if not (f.name in _SAVE_SUBDIRS and f.parent in folders)}
+    return {f for f in folders if not (f.name in _SAVE_SUBDIRS and f.parent in folders)}
+
+
+def _save_folder(saves: list[PurePosixPath]) -> PurePosixPath:
+    folders = save_folders(saves)
     if not folders:
         raise ArchiveError("No Enshrouded save files found (expected files like "
                            "world0.ksd, or 3ad85aea and 3ad85aea-index)")
@@ -259,3 +267,28 @@ def read_config(path: Path) -> dict[str, Any] | None:
             return json.loads(z.read(CONFIG_NAME))
         except KeyError:
             return None
+
+
+def extract_tar(path: Path, dest: Path, max_bytes: int = MAX_UNCOMPRESSED_BYTES) -> None:
+    """Extract a tar made by `docker cp` (one top-level entry, renamed to `dest`).
+    Only regular files and folders are extracted; links and devices are skipped."""
+    total = 0
+    with tarfile.open(path) as tar:
+        for m in tar.getmembers():
+            if not _safe_name(m.name) or not (m.isfile() or m.isdir()):
+                continue
+            parts = PurePosixPath(m.name).parts[1:]
+            target = dest.joinpath(*parts) if parts else dest
+            if m.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            total += m.size
+            if total > max_bytes:
+                raise ArchiveError("The files are too large to import")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            src = tar.extractfile(m)
+            if src is None:
+                continue
+            with src, open(target, "wb") as out:
+                shutil.copyfileobj(src, out)
+            os.utime(target, (m.mtime, m.mtime))

@@ -13,6 +13,7 @@ from app.services.bus import Bus
 from app.services.config_service import ConfigService
 from app.services.docker_adapter import DockerAdapter
 from app.services.events import EventLog
+from app.services.import_service import ImportService
 from app.services.jobs import JobManager
 from app.services.metrics import MetricsService
 from app.services.monitor import Monitor
@@ -41,6 +42,7 @@ class Services:
     auth: AuthService
     notifier: Notifier
     app_update: AppUpdater
+    imports: ImportService
     selfcheck: SelfCheckResult | None = None
 
     @classmethod
@@ -79,5 +81,7 @@ class Services:
         jobs.listeners.append(notifier.on_job)
         app_update = AppUpdater(settings, docker, notifier,
                                 **({"poll_s": poll_interval} if poll_interval else {}))
+        imports = ImportService(settings, docker, worlds, backups, jobs, events)
         return cls(settings, docker, bus, jobs, events, config, worlds, monitor, backups,
-                   scheduler, updates, metrics, app_settings, auth, notifier, app_update)
+                   scheduler, updates, metrics, app_settings, auth, notifier, app_update,
+                   imports)

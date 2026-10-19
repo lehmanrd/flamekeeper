@@ -154,6 +154,30 @@ game files from an existing world instead of downloading about 9 GB again. Keen 
 16 GB RAM, 6 CPU cores and 30 GB disk per server; FlameKeeper warns when your worlds
 add up to more than the host has, but doesn't stop you (idle servers use far less).
 
+## Importing an existing server
+
+Already running an Enshrouded server on the same host? **Import server** in the sidebar
+brings it under FlameKeeper: it creates a new world and copies the old server's savegame,
+settings, roles (with their passwords) and bans into it. It works with:
+
+- **a Docker container from any Enshrouded image** (mornedhels, sknnr and others).
+  FlameKeeper looks for `enshrouded_server.json` and the savegame in the container's
+  volumes and files, not for a particular image;
+- **a folder on the host**, such as a server installed without Docker (FlameKeeper only
+  reads it);
+- **a backup zip** with the savegame folder and, ideally, `enshrouded_server.json`.
+
+Scanning changes nothing. On import, a running container is stopped just before the new
+world's first start (the game saves on shutdown), and its restart policy is set to `no` so
+it can't come back after a reboot and take the port. The new world keeps the old port by
+default, so players find it where it was. If the import fails, the old container is started
+again. The copied files stay as the new world's "imported" backup.
+
+The old server is never deleted automatically. Once you're happy with the new world, its
+Overview page offers to remove the old container, and then, as a separate step, its Docker
+volumes. Bind-mounted host folders are left for you to delete. Docker Compose would recreate
+a removed container on `docker compose up`, so take it out of your compose file too.
+
 ## Backups
 
 Each world is backed up hourly by default, keeping the last 48 scheduled backups and

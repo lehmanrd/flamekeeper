@@ -171,3 +171,27 @@ class AuthSession(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class WorldImport(Base):
+    """Where an imported world came from, so the old server can be cleaned up later."""
+
+    __tablename__ = "world_imports"
+
+    world_id: Mapped[str] = mapped_column(
+        ForeignKey("worlds.id", ondelete="CASCADE"), primary_key=True
+    )
+    job_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # container | host_path | upload
+    source_kind: Mapped[str] = mapped_column(String(16))
+    # Container name, host folder or uploaded file name.
+    source_label: Mapped[str] = mapped_column(String(500), default="")
+    container_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    image: Mapped[str] = mapped_column(String(300), default="")
+    volumes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    bind_sources: Mapped[list[str]] = mapped_column(JSON, default=list)
+    prev_restart_policy: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    was_running: Mapped[bool] = mapped_column(Boolean, default=False)
+    # importing | imported | rolled_back | container_removed | volumes_removed | dismissed
+    state: Mapped[str] = mapped_column(String(32), default="importing")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

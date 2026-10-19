@@ -137,3 +137,25 @@ class UpdatePolicy(BaseModel):
     update_window_cron: str | None = Field(default=None, max_length=100)
     image_update_policy: Literal["notify", "when_empty"] | None = None
     pre_update_backup: bool | None = None
+
+
+class ImportScanRequest(BaseModel):
+    kind: Literal["container", "host_path"]
+    container: str | None = Field(default=None, max_length=200)
+    path: str | None = Field(default=None, max_length=1000)
+
+
+class ImportCreate(BaseModel):
+    display_name: str = Field(min_length=1, max_length=100)
+    slug: str | None = Field(default=None, max_length=40)
+    query_port: int | None = Field(default=None, ge=1024, le=65535)
+    image_tag: str | None = Field(default=None, max_length=100)
+    game_branch: str | None = Field(default=None, max_length=64)
+    update_policy: Literal["manual", "immediate", "when_empty", "window"] | None = None
+    backup: BackupPlan | None = None
+    start: bool = True
+    copy_game_from: str | None = None
+    save_path: str | None = Field(
+        default=None, description="One of the scan's save_options (default: its save_path)")
+    confirm_players: bool = Field(
+        default=False, description="Stop the old server even if players may be online")

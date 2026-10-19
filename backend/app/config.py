@@ -86,6 +86,11 @@ class Settings(BaseSettings):
         return self.data_dir / "worlds"
 
     @property
+    def imports_dir(self) -> Path:
+        """Scans of servers being imported (app.services.import_service)."""
+        return self.data_dir / "imports"
+
+    @property
     def in_container(self) -> bool:
         return Path("/.dockerenv").exists()
 
