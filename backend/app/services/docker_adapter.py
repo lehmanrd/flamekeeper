@@ -12,6 +12,7 @@ import threading
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Protocol
 
 import anyio
@@ -42,6 +43,15 @@ class ContainerSpec:
 
 
 @dataclass
+class Mount:
+    type: str  # bind | volume | tmpfs | ...
+    destination: str
+    source: str = ""  # host path (for a volume: its folder under /var/lib/docker)
+    name: str | None = None  # volume name
+    rw: bool = True
+
+
+@dataclass
 class ContainerInfo:
     id: str
     name: str
@@ -53,6 +63,12 @@ class ContainerInfo:
     finished_at: datetime | None = None
     restart_count: int = 0
     env: dict[str, str] = field(default_factory=dict)
+    mounts: list[Mount] = field(default_factory=list)
+    # "15637/udp" -> host ports it is published on
+    ports: dict[str, list[int]] = field(default_factory=dict)
+    restart_policy: str = ""
+    network_mode: str = ""
+    auto_remove: bool = False
 
     @property
     def running(self) -> bool:
@@ -82,11 +98,16 @@ class DockerAdapter(Protocol):
     async def ping(self) -> dict[str, Any]: ...
     async def get_container(self, name_or_id: str) -> ContainerInfo | None: ...
     async def list_managed(self) -> list[ContainerInfo]: ...
+    async def list_containers(self) -> list[ContainerInfo]: ...
     async def create_container(self, spec: ContainerSpec) -> ContainerInfo: ...
     async def start(self, name_or_id: str) -> None: ...
     async def stop(self, name_or_id: str, timeout: int) -> None: ...
     async def restart(self, name_or_id: str, timeout: int) -> None: ...
     async def remove(self, name_or_id: str, force: bool = False) -> None: ...
+    async def update_restart_policy(self, name_or_id: str, policy: str) -> None: ...
+    async def get_archive(self, name_or_id: str, path: str, dest: Path) -> None: ...
+    async def remove_volume(self, name: str) -> None: ...
+    async def volume_users(self, name: str) -> list[str]: ...
     async def exec(self, name_or_id: str, cmd: list[str]) -> ExecResult: ...
     async def logs_tail(
         self, name_or_id: str, tail: int = 500, since: datetime | None = None
@@ -108,6 +129,7 @@ class DockerAdapter(Protocol):
         cmd: list[str],
         binds: dict[str, str] | None = None,
         network_mode: str | None = None,
+        volumes_from: list[str] | None = None,
     ) -> ExecResult: ...
     async def run_detached(
         self,
@@ -146,6 +168,17 @@ def split_timestamp(line: str) -> tuple[datetime | None, str]:
         return None, line
 
 
+def _published_ports(host_config: dict[str, Any]) -> dict[str, list[int]]:
+    out: dict[str, list[int]] = {}
+    for port, bindings in (host_config.get("PortBindings") or {}).items():
+        for b in bindings or []:
+            try:
+                out.setdefault(port, []).append(int(b.get("HostPort") or port.split("/")[0]))
+            except ValueError:
+                continue
+    return out
+
+
 def _split_lines(buffer: str, chunk: str) -> tuple[list[str], str]:
     buffer += chunk
     *lines, rest = buffer.split("\n")
@@ -166,6 +199,7 @@ class RealDockerAdapter:
     def _info(self, c: Any) -> ContainerInfo:
         attrs = c.attrs
         state = attrs.get("State", {})
+        host = attrs.get("HostConfig") or {}
         env = {}
         for item in attrs.get("Config", {}).get("Env") or []:
             k, _, v = item.partition("=")
@@ -181,6 +215,14 @@ class RealDockerAdapter:
             finished_at=_parse_ts(state.get("FinishedAt")),
             restart_count=attrs.get("RestartCount", 0),
             env=env,
+            mounts=[Mount(type=m.get("Type", ""), destination=m.get("Destination", ""),
+                          source=m.get("Source", ""), name=m.get("Name"),
+                          rw=bool(m.get("RW", True)))
+                    for m in attrs.get("Mounts") or []],
+            ports=_published_ports(host),
+            restart_policy=(host.get("RestartPolicy") or {}).get("Name") or "no",
+            network_mode=host.get("NetworkMode") or "",
+            auto_remove=bool(host.get("AutoRemove")),
         )
 
     def _get(self, name_or_id: str) -> Any:
@@ -213,6 +255,10 @@ class RealDockerAdapter:
             return [self._info(c) for c in cs]
 
         return await self._run(_do)
+
+    async def list_containers(self) -> list[ContainerInfo]:
+        return await self._run(lambda: [self._info(c)
+                                        for c in self.client.containers.list(all=True)])
 
     async def create_container(self, spec: ContainerSpec) -> ContainerInfo:
         def _do() -> ContainerInfo:
@@ -258,6 +304,37 @@ class RealDockerAdapter:
                 c.remove(force=force)
 
         await self._run(_do)
+
+    async def update_restart_policy(self, name_or_id: str, policy: str) -> None:
+        await self._run(lambda: self.client.containers.get(name_or_id).update(
+            restart_policy={"Name": policy}))
+
+    async def get_archive(self, name_or_id: str, path: str, dest: Path) -> None:
+        """Copy `path` out of a container (running or not) as a tar file, like docker cp."""
+
+        def _do() -> None:
+            try:
+                stream, _ = self.client.containers.get(name_or_id).get_archive(path)
+            except self._docker.errors.NotFound as e:
+                raise DockerError(f"{path} doesn't exist in the container") from e
+            with open(dest, "wb") as out:
+                for chunk in stream:
+                    out.write(chunk)
+
+        await self._run(_do)
+
+    async def remove_volume(self, name: str) -> None:
+        def _do() -> None:
+            try:
+                self.client.volumes.get(name).remove()
+            except self._docker.errors.NotFound:
+                pass
+
+        await self._run(_do)
+
+    async def volume_users(self, name: str) -> list[str]:
+        return await self._run(lambda: [
+            c.name for c in self.client.containers.list(all=True, filters={"volume": name})])
 
     async def exec(self, name_or_id: str, cmd: list[str]) -> ExecResult:
         def _do() -> ExecResult:
@@ -410,17 +487,25 @@ class RealDockerAdapter:
         cmd: list[str],
         binds: dict[str, str] | None = None,
         network_mode: str | None = None,
+        volumes_from: list[str] | None = None,
     ) -> ExecResult:
+        """Run a throwaway container. A bind's container path may end in ":ro"."""
+
         def _do() -> ExecResult:
             try:
                 self.client.images.get(image)
             except self._docker.errors.ImageNotFound:
                 self.client.images.pull(image)
+            volumes = {}
+            for h, p in (binds or {}).items():
+                target, ro = (p[:-3], True) if p.endswith(":ro") else (p, False)
+                volumes[h] = {"bind": target, "mode": "ro" if ro else "rw"}
             c = self.client.containers.run(
                 image,
                 cmd,
                 detach=True,
-                volumes={h: {"bind": p, "mode": "rw"} for h, p in (binds or {}).items()},
+                volumes=volumes,
+                volumes_from=volumes_from,
                 network_mode=network_mode,
                 labels={f"{LABEL_MANAGED}.helper": "true"},
             )

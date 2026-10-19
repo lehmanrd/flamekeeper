@@ -26,6 +26,7 @@ export function Overview() {
       <div className="top">
         <h1>Worlds</h1>
         <span className="spacer" />
+        <Link className="btn" to="/import">⇥ Import a server</Link>
         <Link className="btn primary" to="/new">＋ New world</Link>
       </div>
 
@@ -66,8 +67,9 @@ export function Overview() {
       {worlds && worlds.length === 0 && (
         <div className="card empty">
           <h2>No worlds yet</h2>
-          <p>Create a world to download and run an Enshrouded dedicated server.</p>
-          <Link className="btn primary" to="/new">＋ Create your first world</Link>
+          <p>Create a world to download and run an Enshrouded dedicated server, or import a server you already run.</p>
+          <Link className="btn primary" to="/new">＋ Create your first world</Link>{" "}
+          <Link className="btn" to="/import">⇥ Import an existing server</Link>
         </div>
       )}
       <div className="grid g3">

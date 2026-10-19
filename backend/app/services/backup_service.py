@@ -36,7 +36,7 @@ from app.services.world_service import CreateWorldInput, WorldError, WorldServic
 log = logging.getLogger(__name__)
 
 KINDS = ("scheduled", "manual", "pre-update", "pre-restore", "pre-image-update", "uploaded",
-         "image")
+         "image", "imported")
 # Kinds that max_age_days applies to. Scheduled ones follow retention_count; image ones
 # belong to the image's own BACKUP_MAX_COUNT.
 AGED_KINDS = ("manual", "pre-update", "pre-restore", "pre-image-update", "uploaded")
@@ -436,11 +436,11 @@ class BackupService:
             new_paths = self.paths(new)
             ctx.progress(1, f"Copying the savegame from {src.display_name}")
             if zip_path is not None and summary is not None:
-                await asyncio.to_thread(archive.extract_saves, zip_path, summary,
-                                        new_paths.savegame)
-            else:
-                await asyncio.to_thread(archive.snapshot_dir, src_paths.savegame,
-                                        new_paths.savegame)
+                await self.seed_from_zip(ctx, new, zip_path, summary, doc, source="clone",
+                                         note=f"Cloned from {src.display_name}")
+                return
+            await asyncio.to_thread(archive.snapshot_dir, src_paths.savegame,
+                                    new_paths.savegame)
             result = self.config.apply_document(new, doc, source="clone", keep_name=True,
                                                 note=f"Cloned from {src.display_name}")
             ctx.log(f"Copied settings and roles from {src.display_name} "
@@ -450,6 +450,51 @@ class BackupService:
                                 slot_count=min(max(slot_count, 1), 16), query_port=query_port,
                                 image_tag=src.image_tag, puid=src.puid, pgid=src.pgid)
         return await self.worlds.create(data, seed=seed, job_type="clone")
+
+    async def seed_from_zip(self, ctx: JobContext, new: World, zip_path: Path,
+                            summary: archive.ZipSummary, doc: dict[str, Any], *, source: str,
+                            note: str, convert_legacy_password: bool = False) -> None:
+        """Put a backup's savegame and settings into a world being created."""
+        try:
+            files = await asyncio.to_thread(archive.extract_saves, zip_path, summary,
+                                            self.paths(new).savegame)
+        except (archive.ArchiveError, OSError) as e:
+            raise JobFailed(f"Could not copy the savegame: {e}") from e
+        ctx.log(f"Copied {len(files)} savegame file(s)")
+        result = self.config.apply_document(new, doc, source=source, keep_name=True,
+                                            note=note,
+                                            convert_legacy_password=convert_legacy_password)
+        ctx.log(f"Copied settings and roles (revision {result.revision})")
+
+    def add_file(self, world: World, src: Path, *, kind: str, note: str) -> Path:
+        """Move a finished zip into the world's backups as `kind` and list it."""
+        paths = self.paths(world)
+        paths.backups.mkdir(parents=True, exist_ok=True)
+        stamp = _now().strftime("%Y%m%d-%H%M%S")
+        dest = paths.backups / f"{stamp}_{kind}.zip"
+        n = 2
+        while dest.exists():
+            dest = paths.backups / f"{stamp}-{n}_{kind}.zip"
+            n += 1
+        os.chmod(src, 0o600)
+        shutil.move(src, dest)
+        manifest: dict[str, Any] = {}
+        try:
+            manifest = archive.inspect_zip(dest, trusted=True).manifest or {}
+        except archive.ArchiveError:
+            pass
+        saved = None
+        try:
+            saved = datetime.fromisoformat(manifest["saved_at"])
+        except (KeyError, TypeError, ValueError):
+            pass
+        with session_scope() as s:
+            s.add(Backup(world_id=world.id, filename=str(dest.relative_to(paths.root)),
+                         size_bytes=dest.stat().st_size, created_at=_now(), kind=kind,
+                         note=note, game_build_id=manifest.get("game_build_id"),
+                         saved_at=saved))
+        self._disk_cache.pop(world.id, None)
+        return dest
 
     # -- retention ----------------------------------------------------------------------
 

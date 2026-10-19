@@ -18,6 +18,9 @@ import type {
   DryRunResponse,
   FieldProblem,
   HostInfo,
+  ImportCandidate,
+  ImportCreateBody,
+  ImportScan,
   InfraPatch,
   MetricsRange,
   MetricsResponse,
@@ -36,6 +39,7 @@ import type {
   SystemInfo,
   WorldDetail,
   WorldEvent,
+  WorldImportInfo,
   WorldSummary,
 } from "./types";
 
@@ -203,6 +207,27 @@ export const api = {
     }),
   cloneWorld: (id: string, body: { source: string; display_name: string; slug?: string; query_port?: number }) =>
     request<{ world: WorldDetail; job_id: string }>("POST", `/worlds/${id}/clone`, body),
+  importCandidates: () => request<ImportCandidate[]>("GET", "/imports/candidates"),
+  scanImport: (body: { kind: "container"; container: string } | { kind: "host_path"; path: string }) =>
+    request<ImportScan>("POST", "/imports/scan", body),
+  uploadImport: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<ImportScan>("POST", "/imports/upload", form);
+  },
+  previewImport: (token: string, body: ImportCreateBody) =>
+    request<CreatePreview>("POST", `/imports/${token}/create?dry_run=true`, body),
+  createImport: (token: string, body: ImportCreateBody) =>
+    request<{ world: WorldDetail; job_id: string }>("POST", `/imports/${token}/create`, body),
+  worldImport: (id: string) => request<{ import: WorldImportInfo | null }>("GET", `/worlds/${id}/import`),
+  removeImportedContainer: (id: string) =>
+    request<{ import: WorldImportInfo }>("POST", `/worlds/${id}/import/remove-container`),
+  removeImportedVolumes: (id: string) =>
+    request<{ removed: string[]; kept: { name: string; used_by: string[]; error?: string }[]; import: WorldImportInfo }>(
+      "POST",
+      `/worlds/${id}/import/remove-volumes`,
+    ),
+  dismissImport: (id: string) => request<void>("POST", `/worlds/${id}/import/dismiss`),
   updateBackupSchedule: (id: string, body: ScheduleUpdate) =>
     request<BackupSchedule>("PUT", `/worlds/${id}/schedules/backup`, body),
   revealPassword: (id: string, index: number) =>

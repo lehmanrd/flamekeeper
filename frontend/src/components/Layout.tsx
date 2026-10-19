@@ -57,6 +57,9 @@ export function Layout() {
           <NavLink to="/new">
             <span className="ico">＋</span> New world
           </NavLink>
+          <NavLink to="/import">
+            <span className="ico">⇥</span> Import server
+          </NavLink>
           {world && (
             <>
               <div className="navgroup">World · {world.display_name}</div>
