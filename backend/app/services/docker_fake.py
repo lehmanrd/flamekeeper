@@ -46,6 +46,8 @@ class FakeDockerAdapter:
         self.local_digests: dict[str, str] = {}
         self.registry_digests: dict[str, str] = {}
         self.update_delay = 0.0
+        # Failed steamcmd runs before the next update succeeds (2 = the updater gives up).
+        self.steam_errors = 0
         self._followers: dict[str, list[asyncio.Queue[str | None]]] = {}
         self.detached: list[tuple[str, str, list[str], bool, bool]] = []
         self._seq = 0
@@ -251,6 +253,22 @@ class FakeDockerAdapter:
         manifest = server / "steamapps" / "appmanifest_2278520.acf" if server else None
         current = manifest.read_text() if manifest and manifest.exists() else ""
         if force or f'"{self.latest_build}"' not in current:
+            # Like the image's updater: steamcmd failures are retried once, then the
+            # update is given up and the old version started.
+            for attempt in range(2):
+                if self.steam_errors <= attempt:
+                    break
+                self.emit_log(c.id, "supervisord: enshrouded-updater Error! App '2278520' "
+                              "state is 0x6 after update job.")
+                if attempt == 1:
+                    self.emit_log(c.id, "supervisord: enshrouded-updater WARN - Download of "
+                                  "Enshrouded server failed - aborting update")
+                    self.emit_log(c.id, "supervisord: enshrouded-server INFO - Running "
+                                  "enshrouded-server")
+                    await self._boot(c)
+                    return
+                self.emit_log(c.id, "supervisord: enshrouded-updater WARN - Download of "
+                              "Enshrouded server failed - retry")
             for pct in (12.5, 61.89, 100.0):
                 if self.update_delay:
                     await asyncio.sleep(self.update_delay)

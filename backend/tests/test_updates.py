@@ -254,3 +254,41 @@ def test_player_history(client: TestClient) -> None:
     first = client.get(f"/api/worlds/{wid}/events?limit=1").json()[0]
     older = client.get(f"/api/worlds/{wid}/events?before={first['id']}").json()
     assert all(e["id"] < first["id"] for e in older)
+
+
+def test_update_survives_a_steamcmd_error_the_updater_retries(
+        client: TestClient, settings: Settings, fake_docker: FakeDockerAdapter) -> None:
+    """Seen on 2026-10-16: steamcmd reported state 0x6 once, the image's updater retried
+    and installed the update, but the job had already failed on the first error."""
+    world = _create(client)
+    wid = world["id"]
+    fake_docker.latest_build = "23200000"
+    fake_docker.steam_errors = 1
+    _status(client, wid, check=True)
+    job = client.post(f"/api/worlds/{wid}/update", json={}).json()["job_id"]
+    result = wait_job(client, job)
+    assert result["status"] == "succeeded", client.get(f"/api/jobs/{job}").json()
+    assert _manifest_build(settings) == "23200000"
+    log = client.get(f"/api/jobs/{job}").json()["log"]
+    assert "no content server" in log and "trying again" in log
+    w = wait_for(lambda: (d := client.get(f"/api/worlds/{wid}").json())["state"] == "online"
+                 and d)
+    assert w["last_failure"] is None
+
+
+def test_update_fails_when_the_updater_gives_up(
+        client: TestClient, settings: Settings, fake_docker: FakeDockerAdapter) -> None:
+    world = _create(client)
+    wid = world["id"]
+    fake_docker.latest_build = "23200000"
+    fake_docker.steam_errors = 2
+    _status(client, wid, check=True)
+    job = client.post(f"/api/worlds/{wid}/update", json={}).json()["job_id"]
+    result = wait_job(client, job)
+    assert result["status"] == "failed"
+    assert "no content server" in result["message"] and "gave up" in result["message"]
+    assert _manifest_build(settings) == "23178631"
+    # The image starts the old version anyway; the card keeps saying the update failed.
+    w = wait_for(lambda: (d := client.get(f"/api/worlds/{wid}").json())["state"] == "online"
+                 and d)
+    assert w["last_failure"]["title"].startswith("Game update failed")

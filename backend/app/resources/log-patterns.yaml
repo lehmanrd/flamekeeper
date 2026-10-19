@@ -11,12 +11,18 @@ server_saved: "\\[server\\] Saved$"
 steam_progress: "Update state \\(0x[0-9a-fA-F]+\\) (?P<phase>[a-z ]+), progress: (?P<pct>[0-9.]+) \\((?P<done>\\d+) / (?P<total>\\d+)\\)"
 steam_update_start: "enshrouded-updater INFO - Running enshrouded-updater"
 steam_success: "Success! App '2278520' fully installed"
+# The image's updater tries steamcmd twice; after a second failure it starts the old
+# version of the server anyway (enshrouded-updater-shared, doUpdate).
+steam_retry: "Download of Enshrouded server failed - retry"
+steam_aborted: "Download of Enshrouded server failed - aborting update"
 
 # Verified with a real client (docs/game-server-behavior.md, Log lines).
 player_joined: "\\[server\\] Player '(?P<name>.+)' logged in with Permissions:"
 player_left: "\\[server\\] Remove Player '(?P<name>.+)'$"
 
 # Failures. {name} placeholders in title/hint are filled from the regex groups.
+# `retryable`: steamcmd errors the image's updater retries; they only count once it gives
+# up (steam_aborted) or the server doesn't come online.
 failures:
   - pattern: "Failed to parse enum '(?P<enum>[^:']+): Invalid value '(?P<value>[^']*)'"
     title: "Invalid value '{value}' in enshrouded_server.json ({enum})"
@@ -26,9 +32,11 @@ failures:
     hint: "The file has an invalid value. Check the lines just before this one in the log."
   - pattern: "App '2278520' state is 0x202 after update job"
     title: "Update failed: permissions or disk space"
+    retryable: true
     hint: "Check that the world's game directory is owned by PUID:PGID and that there is free disk space of at least twice the game size."
   - pattern: "App '2278520' state is 0x6 after update job"
     title: "Update failed: no content server or broken app manifest"
+    retryable: true
     hint: "Run a forced update from the Updates page."
   - pattern: "wine: could not load kernel32\\.dll"
     title: "Wine/Proton could not start the server"

@@ -140,6 +140,15 @@ stops the server, runs `steamcmd app_update 2278520 <branch> validate`, writes
 same on a running container. `enshrouded-force-update` deletes `current_version` and
 `steamapps/` (manifests included) first.
 
+steamcmd sometimes fails once and works on the next try: on 2026-10-16 an update logged
+`Error! App '2278520' state is 0x6 after update job`, and the updater's second run
+installed it 24 seconds later. The updater runs steamcmd at most twice. After the first
+failure it logs `Download of Enshrouded server failed - retry`. After a second failure it
+logs `… - aborting update` and starts the **old** version of the server. FlameKeeper's
+update job therefore treats steamcmd's `state is 0x…` errors as fatal only after the
+updater gives up. The world card keeps showing a given-up update even after the old
+version comes online.
+
 FlameKeeper's update job: wait until empty (optional) → `supervisorctl stop
 enshrouded-server` (the server saves) → backup → merge pending config → `supervisorctl
 start enshrouded-updater` → follow steamcmd progress → wait for `HostOnline` → check the
