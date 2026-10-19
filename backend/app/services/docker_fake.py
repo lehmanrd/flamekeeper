@@ -175,6 +175,23 @@ class FakeDockerAdapter:
         with tarfile.open(dest, "w") as tar:
             tar.add(local, arcname=os.path.basename(path.rstrip("/")) or "root")
 
+    async def path_exists(self, name_or_id: str, path: str) -> bool:
+        local = self._local(self._require(name_or_id), path)
+        return local is not None and (local.exists() or local.is_symlink())
+
+    async def copy_tree_out(self, name_or_id: str, path: str, dest: Path, *,
+                            skip_top: set[str], on_bytes) -> int:  # noqa: ANN001
+        from app.services.backup_archive import extract_tree
+
+        self.calls.append(("copy_out", self._require(name_or_id).name))
+        tmp = dest.parent / f".fake-{uuid.uuid4().hex}.tar"
+        try:
+            await self.get_archive(name_or_id, path, tmp)
+            with open(tmp, "rb") as f:
+                return extract_tree(f, dest, skip_top=skip_top, on_bytes=on_bytes)
+        finally:
+            tmp.unlink(missing_ok=True)
+
     async def remove_volume(self, name: str) -> None:
         if await self.volume_users(name):
             raise DockerError(f"volume {name} is in use")
@@ -427,12 +444,18 @@ class FakeDockerAdapter:
         binds: dict[str, str] | None = None,
         network_mode: str | None = None,
         volumes_from: list[str] | None = None,
+        timeout: int = 120,
     ) -> ExecResult:
         self.helper_calls.append(cmd)
         if cmd and cmd[0] == "find":
             return self._helper_find(cmd, binds or {}, volumes_from or [])
+        if cmd[:2] == ["sh", "-c"] and "cp -a" in cmd[2]:
+            return self._helper_game_copy(cmd, binds or {})
         if cmd[:2] == ["sh", "-c"] and "/out/" in cmd[2]:
             return self._helper_copy(cmd, binds or {})
+        if cmd[:2] == ["test", "-f"] and binds and any(t.endswith(":ro") for t in binds.values()):
+            local = self._helper_local(cmd[2], binds, [])
+            return ExecResult(0 if local is not None and local.is_file() else 1, "")
         if cmd[0] == "cat" and binds:
             local = self._helper_local(cmd[1], binds, [])
             if local is None or not local.is_file():
@@ -494,6 +517,22 @@ class FakeDockerAdapter:
                         out.append(f"{root.rstrip('/')}/{(rel / f).as_posix()}"
                                    .replace("/./", "/"))
         return ExecResult(0, "".join(f"{line}\n" for line in sorted(out)))
+
+    def _helper_game_copy(self, cmd: list[str], binds: dict[str, str]) -> ExecResult:
+        """The importer's game-file copy: $1's entries into /out, minus saves and such."""
+        out = self._helper_local("/out", binds, [])
+        src = self._helper_local(cmd[4], binds, [])
+        if out is None or src is None or not src.is_dir():
+            return ExecResult(1, f"sh: cd: can't cd to {cmd[4]}\n")
+        skip = {"savegame", "logs", "backups", "crash_dumps", "enshrouded_server.json", cmd[5]}
+        for entry in src.iterdir():
+            if entry.name in skip:
+                continue
+            if entry.is_dir() and not entry.is_symlink():
+                shutil.copytree(entry, out / entry.name, symlinks=True, dirs_exist_ok=True)
+            else:
+                shutil.copy2(entry, out / entry.name, follow_symlinks=False)
+        return ExecResult(0, "")
 
     def _helper_copy(self, cmd: list[str], binds: dict[str, str]) -> ExecResult:
         """The importer's copy script: save folder ($1) and config ($2) into /out."""

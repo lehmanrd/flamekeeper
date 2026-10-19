@@ -19,6 +19,7 @@ import shutil
 import tarfile
 import tempfile
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -292,3 +293,60 @@ def extract_tar(path: Path, dest: Path, max_bytes: int = MAX_UNCOMPRESSED_BYTES)
             with src, open(target, "wb") as out:
                 shutil.copyfileobj(src, out)
             os.utime(target, (m.mtime, m.mtime))
+
+
+def extract_tree(fileobj: Any, dest: Path, *, skip_top: set[str] | frozenset[str] = frozenset(),
+                 on_bytes: Callable[[int], None] | None = None) -> int:
+    """Extract a streamed `docker cp` tar of a folder into `dest` (the tar's top-level
+    folder becomes `dest`), skipping top-level entries named in `skip_top`.
+
+    For game files: symlinks are kept as links (the Proton prefix needs them), but nothing
+    is ever written through a link or outside `dest`. Returns the bytes written.
+    """
+    dest.mkdir(parents=True, exist_ok=True)
+    root = dest.resolve()
+    written = 0
+    with tarfile.open(fileobj=fileobj, mode="r|") as tar:
+        for m in tar:
+            parts = PurePosixPath(m.name).parts[1:]
+            # Not _safe_name: Proton prefixes have names like "c:" and "z:".
+            if not parts or parts[0] in skip_top or ".." in parts or m.name.startswith("/"):
+                continue
+            target = dest.joinpath(*parts)
+            if not _inside(root, target.parent):
+                continue  # a parent folder is a link pointing elsewhere
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.is_symlink() or (target.exists() and not target.is_dir()):
+                target.unlink()
+            if m.isdir():
+                target.mkdir(exist_ok=True)
+                target.chmod(m.mode & 0o7777 or 0o755)
+            elif m.issym():
+                os.symlink(m.linkname, target)
+            elif m.islnk():
+                src = dest.joinpath(*PurePosixPath(m.linkname).parts[1:])
+                if src.is_file() and not src.is_symlink() and \
+                        src.resolve().is_relative_to(root):
+                    shutil.copy2(src, target)
+            elif m.isfile():
+                f = tar.extractfile(m)
+                if f is None:
+                    continue
+                with f, open(target, "wb") as out:
+                    while chunk := f.read(1024 * 1024):
+                        out.write(chunk)
+                        written += len(chunk)
+                        if on_bytes:
+                            on_bytes(len(chunk))
+                target.chmod(m.mode & 0o7777 or 0o644)
+                os.utime(target, (m.mtime, m.mtime))
+    return written
+
+
+def _inside(root: Path, path: Path) -> bool:
+    """Whether `path` (which may not exist yet) is within `root` once its existing part's
+    links are followed."""
+    existing = path
+    while not existing.exists() and not existing.is_symlink():
+        existing = existing.parent
+    return existing.resolve().is_relative_to(root)

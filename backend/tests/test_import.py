@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import shutil
+import tarfile
 import zipfile
 from pathlib import Path
 
@@ -353,3 +354,119 @@ def test_restart_during_import_puts_the_old_server_back(
     old = fake_docker._find("enshrouded")
     assert old.status == "running" and old.restart_policy == "unless-stopped"
     assert fake_docker._find(f"flamekeeper-{world['slug']}").status == "exited"
+
+
+# -- game files from the old server ------------------------------------------------------
+
+
+def _install(server: Path, build: str = "25988414") -> None:
+    """Game files as steamcmd leaves them, plus a Proton-style link to /."""
+    (server / "enshrouded_server.exe").write_bytes(b"MZ game")
+    (server / "enshrouded_server_000.dat").write_bytes(b"x" * 4096)
+    (server / "steamapps").mkdir(exist_ok=True)
+    (server / "steamapps" / "appmanifest_2278520.acf").write_text(
+        f'"AppState"\n{{\n\t"buildid"\t\t"{build}"\n}}\n')
+    pfx = server / "steamapps" / "compatdata" / "2278520" / "pfx" / "dosdevices"
+    pfx.mkdir(parents=True)
+    (pfx / "z:").symlink_to("/")
+    (server / "logs").mkdir(exist_ok=True)
+    (server / "logs" / "enshrouded_server.log").write_text("old log")
+
+
+def test_copies_game_files_from_the_old_container_before_stopping_it(
+    client: TestClient, fake_docker: FakeDockerAdapter, settings: Settings, tmp_path: Path
+) -> None:
+    save = _mornedhels(tmp_path, fake_docker)
+    _install(save.parent)
+    scan = _scan(client, kind="container", container="enshrouded")
+    assert scan["game_files"] == {"path": "/opt/enshrouded/server", "build": "25988414"}
+    res = client.post(f"/api/imports/{scan['token']}/create?dry_run=true",
+                      json={"display_name": "Embervale", "copy_game_from_source": True,
+                            "copy_game_from": "nope", "confirm_players": True})
+    assert res.status_code == 422
+    world = _import(client, scan["token"], query_port=15637, confirm_players=True,
+                    copy_game_from_source=True)
+
+    server = settings.worlds_dir / world["slug"] / "game" / "server"
+    assert (server / "enshrouded_server.exe").read_bytes() == b"MZ game"
+    assert (server / "enshrouded_server_000.dat").stat().st_size == 4096
+    link = server / "steamapps" / "compatdata" / "2278520" / "pfx" / "dosdevices" / "z:"
+    assert link.is_symlink() and str(link.readlink()) == "/"
+    assert not (server / "logs" / "enshrouded_server.log").exists()
+    assert (server / "savegame" / "world0.ksd").read_bytes() == b"the old world"
+    assert world["build_id"] in (None, "25988414")
+    calls = fake_docker.calls
+    assert calls.index(("copy_out", "enshrouded")) < calls.index(("stop", "enshrouded"))
+
+
+def test_copies_game_files_from_the_container_layer(
+    client: TestClient, fake_docker: FakeDockerAdapter, settings: Settings, tmp_path: Path
+) -> None:
+    vol = tmp_path / "volume"
+    vol.mkdir()
+    (vol / "world0.ksd").write_bytes(b"w")
+    install = tmp_path / "layer"
+    install.mkdir()
+    _install(install, build="111")
+    (install / "enshrouded_server.json").write_text(json.dumps(CONFIG))
+    fake_docker.add_container(
+        "sknnr", "sknnr/enshrouded-dedicated-server:latest", running=False,
+        mounts=[Mount("volume", "/home/steam/enshrouded/savegame", str(vol), name="v")],
+        layer={"/home/steam/enshrouded": install})
+    scan = _scan(client, kind="container", container="sknnr")
+    assert scan["game_files"] == {"path": "/home/steam/enshrouded", "build": "111"}
+    world = _import(client, scan["token"], copy_game_from_source=True)
+    server = settings.worlds_dir / world["slug"] / "game" / "server"
+    assert (server / "enshrouded_server_000.dat").exists()
+    assert (server / "savegame" / "world0.ksd").read_bytes() == b"w"
+
+
+def test_copies_game_files_from_a_host_folder(
+    client: TestClient, settings: Settings, tmp_path: Path
+) -> None:
+    server = tmp_path / "native"
+    (server / "savegame").mkdir(parents=True)
+    (server / "savegame" / "world0.ksd").write_bytes(b"native")
+    (server / "enshrouded_server.json").write_text(json.dumps(CONFIG))
+    _install(server)
+    scan = _scan(client, kind="host_path", path=str(server))
+    assert scan["game_files"] == {"path": str(server), "build": "25988414"}
+    world = _import(client, scan["token"], copy_game_from_source=True)
+    new = settings.worlds_dir / world["slug"] / "game" / "server"
+    assert (new / "enshrouded_server.exe").exists()
+    assert (new / "steamapps" / "compatdata" / "2278520" / "pfx" / "dosdevices" / "z:").is_symlink()
+    assert not (new / "logs" / "enshrouded_server.log").exists()
+    assert (new / "savegame" / "world0.ksd").read_bytes() == b"native"
+
+
+def test_no_game_files_found(client: TestClient, fake_docker: FakeDockerAdapter,
+                             tmp_path: Path) -> None:
+    _mornedhels(tmp_path, fake_docker, running=False)
+    scan = _scan(client, kind="container", container="enshrouded")
+    assert scan["game_files"] is None
+    res = client.post(f"/api/imports/{scan['token']}/create",
+                      json={"display_name": "Embervale", "copy_game_from_source": True})
+    assert res.status_code == 422
+
+
+def test_extract_tree_never_writes_through_links(tmp_path: Path) -> None:
+    from app.services.backup_archive import extract_tree
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        link = tarfile.TarInfo("server/z:")
+        link.type, link.linkname = tarfile.SYMTYPE, str(outside)
+        tar.addfile(link)
+        for name in ("server/z:/evil", "server/../evil", "server/ok/file"):
+            info = tarfile.TarInfo(name)
+            info.size = 4
+            tar.addfile(info, io.BytesIO(b"data"))
+    buf.seek(0)
+    dest = tmp_path / "dest"
+    extract_tree(buf, dest)
+    assert not any(outside.iterdir())
+    assert not (tmp_path / "evil").exists()
+    assert (dest / "ok" / "file").read_bytes() == b"data"
+    assert (dest / "z:").is_symlink()

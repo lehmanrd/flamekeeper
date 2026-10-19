@@ -106,6 +106,9 @@ class DockerAdapter(Protocol):
     async def remove(self, name_or_id: str, force: bool = False) -> None: ...
     async def update_restart_policy(self, name_or_id: str, policy: str) -> None: ...
     async def get_archive(self, name_or_id: str, path: str, dest: Path) -> None: ...
+    async def path_exists(self, name_or_id: str, path: str) -> bool: ...
+    async def copy_tree_out(self, name_or_id: str, path: str, dest: Path, *,
+                            skip_top: set[str], on_bytes: Callable[[int], None]) -> int: ...
     async def remove_volume(self, name: str) -> None: ...
     async def volume_users(self, name: str) -> list[str]: ...
     async def exec(self, name_or_id: str, cmd: list[str]) -> ExecResult: ...
@@ -130,6 +133,7 @@ class DockerAdapter(Protocol):
         binds: dict[str, str] | None = None,
         network_mode: str | None = None,
         volumes_from: list[str] | None = None,
+        timeout: int = 120,
     ) -> ExecResult: ...
     async def run_detached(
         self,
@@ -166,6 +170,26 @@ def split_timestamp(line: str) -> tuple[datetime | None, str]:
         return _parse_ts(head), rest
     except ValueError:
         return None, line
+
+
+class _ChunkReader:
+    """A file-like reader over an iterator of byte chunks (for streaming tarfile)."""
+
+    def __init__(self, chunks: Any) -> None:
+        self._chunks = iter(chunks)
+        self._buf = b""
+
+    def read(self, size: int = -1) -> bytes:
+        while size < 0 or len(self._buf) < size:
+            try:
+                self._buf += next(self._chunks)
+            except StopIteration:
+                break
+        if size < 0:
+            out, self._buf = self._buf, b""
+        else:
+            out, self._buf = self._buf[:size], self._buf[size:]
+        return out
 
 
 def _published_ports(host_config: dict[str, Any]) -> dict[str, list[int]]:
@@ -322,6 +346,35 @@ class RealDockerAdapter:
                     out.write(chunk)
 
         await self._run(_do)
+
+    async def path_exists(self, name_or_id: str, path: str) -> bool:
+        """Whether a file or folder exists in a container (running or not), without
+        copying it (HEAD /containers/{id}/archive)."""
+
+        def _do() -> bool:
+            api = self.client.api
+            res = api.head(api._url("/containers/{0}/archive", name_or_id),
+                           params={"path": path})
+            return res.status_code == 200
+
+        return await self._run(_do)
+
+    async def copy_tree_out(self, name_or_id: str, path: str, dest: Path, *,
+                            skip_top: set[str], on_bytes: Callable[[int], None]) -> int:
+        """Stream a folder out of a container into `dest` (like docker cp, without a
+        temporary tar file)."""
+        from app.services.backup_archive import extract_tree
+
+        def _do() -> int:
+            try:
+                stream, _ = self.client.containers.get(name_or_id).get_archive(
+                    path, chunk_size=1024 * 1024)
+            except self._docker.errors.NotFound as e:
+                raise DockerError(f"{path} doesn't exist in the container") from e
+            return extract_tree(_ChunkReader(stream), dest, skip_top=skip_top,
+                                on_bytes=on_bytes)
+
+        return await self._run(_do)
 
     async def remove_volume(self, name: str) -> None:
         def _do() -> None:
@@ -488,8 +541,10 @@ class RealDockerAdapter:
         binds: dict[str, str] | None = None,
         network_mode: str | None = None,
         volumes_from: list[str] | None = None,
+        timeout: int = 120,
     ) -> ExecResult:
-        """Run a throwaway container. A bind's container path may end in ":ro"."""
+        """Run a throwaway container (at most `timeout` seconds). A bind's container path
+        may end in ":ro"."""
 
         def _do() -> ExecResult:
             try:
@@ -510,7 +565,7 @@ class RealDockerAdapter:
                 labels={f"{LABEL_MANAGED}.helper": "true"},
             )
             try:
-                result = c.wait(timeout=120)
+                result = c.wait(timeout=timeout)
                 out = c.logs().decode("utf-8", "replace")
                 return ExecResult(int(result.get("StatusCode", 1)), out)
             finally:

@@ -75,7 +75,8 @@ async def create(token: str, body: ImportCreate, dry_run: bool = Query(False),
         scan = await services.imports.check(token, data)
         preview = await services.worlds.preview(await services.imports.create_input(scan, data))
         cap = capacity(services.settings.data_dir, len(services.worlds.list()), extra=1,
-                       new_downloads=0 if body.copy_game_from else 1)
+                       new_downloads=0 if body.copy_game_from or body.copy_game_from_source
+                       else 1)
         return {**preview, "capacity": cap}
     world, job_id = await services.imports.create(token, data)
     if body.backup is not None:

@@ -155,6 +155,8 @@ class ImportCreate(BaseModel):
     backup: BackupPlan | None = None
     start: bool = True
     copy_game_from: str | None = None
+    copy_game_from_source: bool = Field(
+        default=False, description="Copy game files from the old server (scan's game_files)")
     save_path: str | None = Field(
         default=None, description="One of the scan's save_options (default: its save_path)")
     confirm_players: bool = Field(
