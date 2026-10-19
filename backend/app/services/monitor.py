@@ -313,6 +313,8 @@ class Monitor:
         if ev.kind == "host_online":
             rt.host_online_seen = True
             rt.update_running = False
+            if rt.last_failure and not rt.last_failure.get("sticky"):
+                rt.last_failure = None  # whatever went wrong before, the server is up now
         elif ev.kind == "server_process_start":
             rt.host_online_seen = False
             rt.a2s_ok = False
@@ -336,9 +338,23 @@ class Monitor:
             rt.update_progress = ev.data["pct"]
         elif ev.kind == "steam_success":
             rt.update_progress = 100.0
+            if rt.last_failure and (rt.last_failure.get("retryable")
+                                    or rt.last_failure.get("sticky")):
+                rt.last_failure = None  # the updater's retry (or a later update) worked
+        elif ev.kind == "steam_aborted":
+            # The image starts the old version anyway, so HostOnline doesn't clear this.
+            cause = rt.last_failure or {}
+            rt.last_failure = {
+                "title": "Game update failed; the server runs the old version",
+                "hint": cause.get("hint") or "Run a forced update from the Updates page.",
+                "line": line, "ts": now.isoformat(), "sticky": True}
+            rt.update_running = False
+            if live:
+                self.events.record(world.id, "warning", message=rt.last_failure["title"],
+                                   hint=rt.last_failure["hint"])
         elif ev.kind == "failure":
             rt.last_failure = {**ev.data, "line": line, "ts": now.isoformat()}
-            if live:
+            if live and not ev.data.get("retryable"):
                 self.events.record(world.id, "warning", message=ev.data["title"],
                                    hint=ev.data["hint"])
         elif ev.kind == "player_joined" and live:

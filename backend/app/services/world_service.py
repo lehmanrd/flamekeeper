@@ -505,9 +505,11 @@ class WorldService:
         name = container_name(world.slug)
         lo, hi = span
         last_pct = -1
+        # A steamcmd error the image's updater retries: fatal only if it gives up.
+        steam_error: dict[str, Any] | None = None
 
         async def follow() -> None:
-            nonlocal last_pct
+            nonlocal last_pct, steam_error
             # Docker's `since` is whole seconds: ask for a little more, then drop lines
             # older than the action using the exact per-line timestamps.
             async for raw in self.docker.logs_follow(
@@ -537,9 +539,21 @@ class WorldService:
                     ctx.progress(hi - 5, "Game installed, starting server")
                 elif ev.kind == "server_process_start":
                     ctx.log("Server process started")
+                elif ev.kind == "steam_retry":
+                    ctx.log("steamcmd failed; the image's updater is trying again")
+                elif ev.kind == "steam_aborted":
+                    title = steam_error["title"] if steam_error else "The game download failed"
+                    raise JobFailed(f"{title} (the updater gave up after two tries)",
+                                    steam_error["hint"] if steam_error else
+                                    "Open the Logs page to see steamcmd's errors.")
+                elif ev.kind == "failure" and ev.data.get("retryable"):
+                    steam_error = ev.data
+                    ctx.log(f"steamcmd: {ev.data['title']}")
                 elif ev.kind == "failure":
                     raise JobFailed(ev.data["title"], ev.data["hint"])
             # Stream ended: the container stopped.
+            if steam_error:
+                raise JobFailed(steam_error["title"], steam_error["hint"])
             raise JobFailed("The game container stopped before the server came online",
                             "Open the Logs page to see why.")
 

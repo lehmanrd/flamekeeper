@@ -18,12 +18,14 @@ class Failure:
     regex: re.Pattern[str]
     title: str
     hint: str
+    retryable: bool = False
 
 
 @dataclass
 class LogEvent:
     kind: str  # host_online | server_process_start | server_shutdown | steam_progress |
-    # steam_update_start | steam_success | player_joined | player_left | failure
+    # steam_update_start | steam_success | steam_retry | steam_aborted | player_joined |
+    # player_left | failure
     data: dict[str, Any]
 
 
@@ -33,7 +35,8 @@ class LogPatterns:
             (k, re.compile(v)) for k, v in raw.items() if isinstance(v, str)
         ]
         self.failures = [
-            Failure(re.compile(f["pattern"]), f["title"], f["hint"])
+            Failure(re.compile(f["pattern"]), f["title"], f["hint"],
+                    bool(f.get("retryable")))
             for f in raw.get("failures", [])
         ]
 
@@ -50,7 +53,8 @@ class LogPatterns:
             if m:
                 groups = m.groupdict()
                 return LogEvent("failure", {"title": f.title.format(**groups),
-                                            "hint": f.hint.format(**groups)})
+                                            "hint": f.hint.format(**groups),
+                                            "retryable": f.retryable})
         return None
 
     def failure_hints(self) -> list[dict[str, str]]:
