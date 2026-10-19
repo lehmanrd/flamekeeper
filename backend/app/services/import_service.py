@@ -39,12 +39,13 @@ from typing import Any
 
 from sqlalchemy import select
 
-from app.config import APP_NAME, LABEL_MANAGED, Settings
+from app.config import APP_NAME, LABEL_MANAGED, STEAM_APP_ID, Settings
 from app.db import session_scope
 from app.models import World, WorldImport
 from app.renderers.json_file import atomic_write, dumps_config
 from app.services import backup_archive as archive
 from app.services.backup_service import BackupService
+from app.services.capacity import GAME_DOWNLOAD
 from app.services.config_service import LEGACY_ROLE_NAME, MASK
 from app.services.config_validation import (
     EDITABLE_SERVER_FIELDS,
@@ -59,7 +60,7 @@ from app.services.docker_adapter import ContainerInfo, DockerAdapter, DockerErro
 from app.services.events import EventLog
 from app.services.jobs import JobContext, JobFailed, JobManager
 from app.services.log_patterns import load_patterns
-from app.services.world_paths import container_name
+from app.services.world_paths import container_name, parse_buildid
 from app.services.world_service import CreateWorldInput, WorldError, WorldService
 
 log = logging.getLogger(__name__)
@@ -80,6 +81,16 @@ STOP_TIMEOUT_S = 120
 MAX_CONFIG_BYTES = 1024**2
 LOG_LINES = 5000
 _TOKEN_RE = re.compile(r"^[0-9a-f]{16}$")
+GAME_EXE = "enshrouded_server.exe"
+# Copied with the save and config, or the server's own output: not game files.
+NOT_GAME_FILES = frozenset({"savegame", "logs", "backups", "crash_dumps", CONFIG_NAME})
+GAME_COPY_TIMEOUT_S = 2 * 60 * 60
+# Game files from a host folder; $1 = install folder, $2 = save folder name to skip.
+GAME_COPY_SCRIPT = ('cd "$1" || exit 1; for f in * .[!.]*; do '
+                    '{ [ -e "$f" ] || [ -L "$f" ]; } || continue; '
+                    'case "$f" in savegame|logs|backups|crash_dumps|enshrouded_server.json) '
+                    'continue;; esac; [ "$f" = "$2" ] && continue; '
+                    'cp -a "$f" /out/ || exit 1; done')
 COPY_SCRIPT = ('set -e; mkdir -p /out/savegame; cp -R "$1"/. /out/savegame/; '
                'if [ -n "$2" ]; then cp "$2" /out/enshrouded_server.json; fi')
 
@@ -313,6 +324,7 @@ class ImportService:
             found = await self._locate_in_container(c, folder)
             scan = await self._finish_scan(token, folder, source, *found)
             scan.update(await self._container_facts(c, scan))
+            scan["game_files"] = await self._game_files_in_container(c, scan, folder)
         except BaseException:
             shutil.rmtree(folder, ignore_errors=True)
             raise
@@ -333,6 +345,7 @@ class ImportService:
             scan = await self._finish_scan(token, folder, source, *found)
             scan.update({"port": await self._free_port(scan["summary"]["query_port"]),
                          "reusable_port": None, "running": False, "players_online": None})
+            scan["game_files"] = await self._game_files_on_host(scan)
         except BaseException:
             shutil.rmtree(folder, ignore_errors=True)
             raise
@@ -352,9 +365,55 @@ class ImportService:
                                          "label": filename}, None, summary.save_prefix,
                                  [], doc, summary, zip_path)
         scan.update({"port": await self._free_port(scan["summary"]["query_port"]),
-                     "reusable_port": None, "running": False, "players_online": None})
+                     "reusable_port": None, "running": False, "players_online": None,
+                     "game_files": None})
         self._save(folder, scan)
         return scan
+
+    def _install_candidates(self, scan: dict[str, Any], *, known: bool) -> list[str]:
+        """Where the server's install (enshrouded_server.exe) may be: next to the config,
+        above the save folder, then (in containers) where images install it."""
+        dirs = []
+        if scan["config_path"]:
+            dirs.append(posixpath.dirname(scan["config_path"]))
+        if scan["save_path"]:
+            dirs.append(posixpath.dirname(scan["save_path"]))
+        if known:
+            dirs += KNOWN_INSTALL_DIRS
+        return list(dict.fromkeys(dirs))
+
+    async def _game_files_in_container(self, c: ContainerInfo, scan: dict[str, Any],
+                                       folder: Path) -> dict[str, Any] | None:
+        for d in self._install_candidates(scan, known=True):
+            try:
+                if not await self.docker.path_exists(c.id, f"{d}/{GAME_EXE}"):
+                    continue
+            except DockerError:
+                continue
+            acf = await self._read_container_file(
+                c, f"{d}/steamapps/appmanifest_{STEAM_APP_ID}.acf", folder)
+            return {"path": d, "build": parse_buildid(acf.decode(errors="replace"))
+                    if acf else None}
+        return None
+
+    async def _game_files_on_host(self, scan: dict[str, Any]) -> dict[str, Any] | None:
+        binds = {"/": f"{HOST_ROOT}:ro"}
+        for d in self._install_candidates(scan, known=False):
+            try:
+                res = await self.docker.run_helper(
+                    self.settings.helper_image, ["test", "-f", f"{HOST_ROOT}{d}/{GAME_EXE}"],
+                    binds=binds)
+                if res.exit_code != 0:
+                    continue
+                acf = await self.docker.run_helper(
+                    self.settings.helper_image,
+                    ["cat", f"{HOST_ROOT}{d}/steamapps/appmanifest_{STEAM_APP_ID}.acf"],
+                    binds=binds)
+            except DockerError:
+                continue
+            build = parse_buildid(acf.output) if acf.exit_code == 0 else None
+            return {"path": d, "build": build}
+        return None
 
     async def _locate_in_container(self, c: ContainerInfo, folder: Path
                                    ) -> tuple[str | None, str | None, list[str], bytes | None]:
@@ -627,6 +686,12 @@ class ImportService:
         if scan["errors"]:
             raise WorldError("Fix these problems in the old server's config first: "
                              + "; ".join(scan["errors"]), 422)
+        if body.get("copy_game_from_source"):
+            if not scan.get("game_files"):
+                raise WorldError("The scan didn't find the old server's game files", 422)
+            if body.get("copy_game_from"):
+                raise WorldError("Copy game files from the old server or from a world, "
+                                 "not both", 422)
         save = body.get("save_path") or scan["save_path"]
         if save != scan["save_path"] and save not in scan["save_options"]:
             raise WorldError("Choose one of the save folders the scan found", 422)
@@ -679,8 +744,14 @@ class ImportService:
                                              note=note, convert_legacy_password=True)
             self._copy_bans(ctx, new, doc)
 
+        game = scan.get("game_files") if body.get("copy_game_from_source") else None
+
+        async def copy_game(ctx: JobContext, new: World) -> None:
+            await self._copy_game_files(ctx, new, source, game["path"], scan["save_path"])
+
         world, job_id = await self.worlds.create(await self.create_input(scan, body),
-                                                 seed=seed, job_type="import")
+                                                 seed=seed, job_type="import",
+                                                 copy_game=copy_game if game else None)
         with session_scope() as s:
             s.add(WorldImport(
                 world_id=world.id, job_id=job_id, source_kind=source["kind"],
@@ -690,6 +761,60 @@ class ImportService:
         self._pending[job_id] = (world.id, token)
         self.events.record(world.id, "imported", source=label)
         return world, job_id
+
+    async def _copy_game_files(self, ctx: JobContext, new: World, source: dict[str, Any],
+                               install: str, save: str | None) -> None:
+        """Copy the old server's game files (not its saves, logs, backups or config) into
+        the new world. The old server keeps running meanwhile: game files only change
+        when it updates. The image's updater checks them against Steam on the first
+        start, so anything missing or different is downloaded then."""
+        dest = self.worlds.paths(new).server
+        usage = shutil.disk_usage(dest)
+        if usage.free < GAME_DOWNLOAD + 1024**3:
+            raise JobFailed(f"Not enough free disk space to copy the game files "
+                            f"({usage.free // 1024**3} GB free, about "
+                            f"{GAME_DOWNLOAD // 1024**3} GB needed)")
+        skip = set(NOT_GAME_FILES)
+        save_name = ""
+        if save and posixpath.dirname(save) == install:
+            save_name = posixpath.basename(save)
+            skip.add(save_name)
+        label = source["label"]
+        copied = 0
+
+        def count(n: int) -> None:
+            nonlocal copied
+            copied += n
+
+        async def run() -> None:
+            if source["kind"] == "container":
+                await self.docker.copy_tree_out(source["container_id"], install, dest,
+                                                skip_top=skip, on_bytes=count)
+                return
+            res = await self.docker.run_helper(
+                self.settings.helper_image,
+                ["sh", "-c", GAME_COPY_SCRIPT, "sh", HOST_ROOT + install, save_name],
+                binds={"/": f"{HOST_ROOT}:ro", str(dest): "/out"},
+                timeout=GAME_COPY_TIMEOUT_S)
+            if res.exit_code != 0:
+                raise JobFailed(f"Could not copy the game files: {res.output.strip()}")
+
+        ctx.progress(1, f"Copying game files from {label}")
+        task = asyncio.create_task(run())
+        while not task.done():
+            await asyncio.wait({task}, timeout=2)
+            if source["kind"] != "container":
+                copied = await asyncio.to_thread(_tree_size, dest)
+            ctx.progress(1 + min(17, int(copied * 18 / GAME_DOWNLOAD)),
+                         f"Copying game files from {label}: {copied / 1024**3:.1f} GB")
+        try:
+            await task
+        except DockerError as e:
+            raise JobFailed(f"Could not copy the game files: {e}") from e
+        if source["kind"] != "container":
+            copied = await asyncio.to_thread(_tree_size, dest)
+        ctx.log(f"Copied {copied // 1024**2} MB of game files from {label}; the first "
+                "start checks them against Steam")
 
     async def _stop_source(self, ctx: JobContext, new: World, source: dict[str, Any]) -> None:
         c = await self._container(source)
@@ -847,3 +972,14 @@ class ImportService:
             raise WorldError("This world wasn't imported", 404)
         self._set(world.id, state="dismissed")
 
+
+
+def _tree_size(path: Path) -> int:
+    total = 0
+    for p in path.rglob("*"):
+        try:
+            if p.is_file() and not p.is_symlink():
+                total += p.stat().st_size
+        except OSError:
+            pass
+    return total

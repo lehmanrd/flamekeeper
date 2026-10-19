@@ -167,6 +167,11 @@ settings, roles (with their passwords) and bans into it. It works with:
   reads it);
 - **a backup zip** with the savegame folder and, ideally, `enshrouded_server.json`.
 
+If the scan finds the old server's game files (`enshrouded_server.exe` and the rest), the
+wizard copies them instead of downloading about 9 GB from Steam. The copy runs while the old
+server is still up, and the new world's first start checks the files against Steam and
+downloads only what's missing or newer.
+
 Scanning changes nothing. On import, a running container is stopped just before the new
 world's first start (the game saves on shutdown), and its restart policy is set to `no` so
 it can't come back after a reboot and take the port. The new world keeps the old port by

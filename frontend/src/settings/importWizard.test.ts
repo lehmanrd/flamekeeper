@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ImportScan } from "../api/types";
-import { fromScan, importBody, importStepErrors, initialImportState, needsPlayerConfirm, portNeedsCheck } from "./importWizard";
+import { FROM_SOURCE, fromScan, importBody, importStepErrors, initialImportState, needsPlayerConfirm, portNeedsCheck } from "./importWizard";
 
 function scan(patch: Partial<ImportScan> = {}): ImportScan {
   return {
@@ -20,6 +20,7 @@ function scan(patch: Partial<ImportScan> = {}): ImportScan {
     reusable_port: 15637,
     running: true,
     players_online: null,
+    game_files: null,
     ...patch,
   };
 }
@@ -58,5 +59,16 @@ describe("import wizard", () => {
       save_path: undefined, confirm_players: true, backup: { enabled: true, cron: "0 * * * *", retention_count: 48 },
     });
     expect(importBody({ ...s, savePath: "/b/savegame" }, sc).save_path).toBe("/b/savegame");
+  });
+});
+
+describe("game files from the old server", () => {
+  it("defaults to copying them when the scan found them", () => {
+    const sc = scan({ game_files: { path: "/opt/enshrouded/server", build: "25988414" } });
+    const s = fromScan(initialImportState(), sc);
+    expect(s.copyFrom).toBe(FROM_SOURCE);
+    expect(importBody(s, sc)).toMatchObject({ copy_game_from_source: true, copy_game_from: undefined });
+    expect(fromScan(s, scan()).copyFrom).toBe("");
+    expect(importBody({ ...s, copyFrom: "world-1" }, sc)).toMatchObject({ copy_game_from_source: false, copy_game_from: "world-1" });
   });
 });

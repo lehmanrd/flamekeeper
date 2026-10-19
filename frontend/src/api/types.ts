@@ -562,6 +562,8 @@ export interface ImportScan {
   restart_policy?: string;
   volumes?: string[];
   bind_sources?: string[];
+  /** The old server's install (enshrouded_server.exe), if found. */
+  game_files: { path: string; build: string | null } | null;
 }
 
 export interface ImportCreateBody {
@@ -572,6 +574,7 @@ export interface ImportCreateBody {
   backup?: { enabled: boolean; cron: string; retention_count: number };
   start?: boolean;
   copy_game_from?: string;
+  copy_game_from_source?: boolean;
   save_path?: string;
   confirm_players?: boolean;
 }

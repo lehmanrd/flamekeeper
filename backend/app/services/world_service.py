@@ -317,9 +317,11 @@ class WorldService:
         *,
         seed: Seed | None = None,
         job_type: str = "create",
+        copy_game: Seed | None = None,
     ) -> tuple[World, str]:
         """Create a world. `seed` runs after the config is written and before the first
-        start (clone uses it to put saves and settings in place)."""
+        start (clone uses it to put saves and settings in place). `copy_game` puts game
+        files in place instead of copying them from another world (import uses it)."""
         data = await self.validate_create(data)
         with session_scope() as s:
             world = World(
@@ -358,20 +360,23 @@ class WorldService:
         job_id = self.jobs.submit(
             job_type, world.id,
             lambda ctx: self._create_job(ctx, world, doc, seed, start=data.start,
-                                         copy_from=source),
+                                         copy_from=source, copy_game=copy_game),
             f"Creating {data.display_name}")
         self.events.record(world.id, "created", slug=world.slug, port=world.query_port)
         return world, job_id
 
     async def _create_job(self, ctx: JobContext, world: World, doc: dict[str, Any],
                           seed: Seed | None = None, *, start: bool = True,
-                          copy_from: World | None = None) -> None:
+                          copy_from: World | None = None,
+                          copy_game: Seed | None = None) -> None:
         paths = self.paths(world)
         ctx.progress(0, "Preparing directories")
         for d in (paths.server, paths.backups, paths.history):
             d.mkdir(parents=True, exist_ok=True)
         if copy_from is not None:
             await self._copy_game_files(ctx, copy_from, world)
+        elif copy_game is not None:
+            await copy_game(ctx, world)
         self.config.write_initial(world, doc)
         ctx.log(f"Wrote {paths.config}")
         if seed:
@@ -385,10 +390,13 @@ class WorldService:
         await self._ensure_image(ctx, world, pull=True, span=(2, 20))
         await self._create_container(ctx, world)
         if not start:
-            ctx.progress(100, "Created; start it when you're ready "
-                         "(the first start downloads the game)")
+            copied = copy_from is not None or copy_game is not None
+            ctx.progress(100, "Created; start it when you're ready" + (
+                "" if copied else " (the first start downloads the game)"))
             return
-        ctx.progress(20, "Starting server (first start downloads the game)")
+        ctx.progress(20, "Starting server" + (
+            " (first start checks the game files)" if copy_from or copy_game
+            else " (first start downloads the game)"))
         since = _now()
         await self._start_container(container_name(world.slug))
         self._poke(world.id)

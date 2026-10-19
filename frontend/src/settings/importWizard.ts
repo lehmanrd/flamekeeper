@@ -4,6 +4,9 @@ import { SLUG_RE, slugify } from "../format";
 
 export const IMPORT_STEPS = ["Source", "What we found", "Settings", "Confirm"] as const;
 
+/** copyFrom value: copy game files from the server being imported. */
+export const FROM_SOURCE = "@source";
+
 export type SourceKind = "container" | "host_path" | "upload";
 
 export interface ImportState {
@@ -16,7 +19,7 @@ export interface ImportState {
   port: string;
   savePath: string;
   imageTag: string;
-  copyFrom: string; // world id, "" = download
+  copyFrom: string; // world id, FROM_SOURCE = the old server, "" = download
   backupCron: string; // "" = off
   keep: number;
   confirmPlayers: boolean;
@@ -49,6 +52,8 @@ export function fromScan(s: ImportState, scan: ImportScan): ImportState {
     slugEdited: false,
     port: String(scan.port),
     savePath: scan.save_path ?? "",
+    // Copying the old server's game files saves a 9 GB download (and downtime).
+    copyFrom: scan.game_files ? FROM_SOURCE : s.copyFrom === FROM_SOURCE ? "" : s.copyFrom,
     confirmPlayers: false,
   };
 }
@@ -96,7 +101,8 @@ export function importBody(s: ImportState, scan: ImportScan | null, start = true
       ? { enabled: true, cron: s.backupCron, retention_count: s.keep }
       : { enabled: false, cron: "0 * * * *", retention_count: s.keep },
     start,
-    copy_game_from: s.copyFrom || undefined,
+    copy_game_from: s.copyFrom && s.copyFrom !== FROM_SOURCE ? s.copyFrom : undefined,
+    copy_game_from_source: s.copyFrom === FROM_SOURCE,
     save_path: s.savePath && s.savePath !== scan?.save_path ? s.savePath : undefined,
     confirm_players: s.confirmPlayers,
   };

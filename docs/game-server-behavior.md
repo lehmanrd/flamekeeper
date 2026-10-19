@@ -126,6 +126,14 @@ have written them into the file on their last start, so the file is the full pic
 save folder comes from the config's `saveDirectory`, relative to the config's folder (the
 server's working directory).
 
+The game files are the folder holding `enshrouded_server.exe`, usually next to the
+config. They're copied before the old server is stopped: they only change when it updates.
+From a container they're streamed through Docker's archive API (`docker cp`), which also
+reaches files outside the mounts. On this host 13 GB took about a minute. Symlinks are kept
+as links, as a Proton prefix needs, but nothing is written through one. `current_version`
+isn't copied, so the image's updater runs steamcmd on the first start, which checks the
+files and downloads only what differs.
+
 A folder on the host is read through a helper with the host's `/` mounted read-only at
 `/host`, not by mounting the folder itself: Docker creates a missing bind-mount source as
 an empty folder on the host.

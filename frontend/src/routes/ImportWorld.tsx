@@ -9,6 +9,7 @@ import { formatBytes, formatTime } from "../format";
 import { useWorlds } from "../hooks/live";
 import { SCHEDULE_PRESETS } from "../settings/backups";
 import {
+  FROM_SOURCE,
   IMPORT_STEPS,
   fromScan,
   importBody,
@@ -179,12 +180,23 @@ function ImportWizard({ defaultTag }: { defaultTag: string }) {
               <span className="hint">FlameKeeper runs worlds with the mornedhels/enshrouded-server image, whatever image the old server used.</span>
               <label htmlFor="i-game">Game files</label>
               <select id="i-game" value={s.copyFrom} onChange={(e) => set({ copyFrom: e.target.value })}>
+                {scan.game_files && (
+                  <option value={FROM_SOURCE}>
+                    Copy from the old server{scan.game_files.build ? ` (build ${scan.game_files.build})` : ""}
+                  </option>
+                )}
                 <option value="">Download from Steam (about 9 GB)</option>
                 {installedWorlds.map((w) => (
                   <option key={w.id} value={w.id}>Copy from {w.display_name} (build {w.build_id})</option>
                 ))}
               </select>
-              {stopsContainer && <span className="hint">The old server is down while the new one downloads; copying is much faster.</span>}
+              <span className="hint">
+                {s.copyFrom === FROM_SOURCE
+                  ? `Copied from ${scan.game_files?.path} while the old server keeps running. The first start checks them against Steam and downloads only what's missing or newer.`
+                  : stopsContainer && !s.copyFrom
+                    ? "The old server is down while the new one downloads; copying is much faster."
+                    : ""}
+              </span>
               <label htmlFor="i-bak">Backups</label>
               <span>
                 <select id="i-bak" value={s.backupCron} onChange={(e) => set({ backupCron: e.target.value })}>
@@ -204,6 +216,9 @@ function ImportWizard({ defaultTag }: { defaultTag: string }) {
             <>
               <h3 style={{ marginTop: 0 }}>What happens</h3>
               <ol>
+                {s.copyFrom === FROM_SOURCE && (
+                  <li>Its game files are copied into the new world{stopsContainer && scan.running ? " while it keeps running" : ""}.</li>
+                )}
                 {stopsContainer && scan.running && (
                   <li>
                     <b>{scan.source.label}</b> is stopped (the game saves on shutdown) and its restart policy set to <span className="mono">no</span>, so it
@@ -216,7 +231,12 @@ function ImportWizard({ defaultTag }: { defaultTag: string }) {
                 <li>Its savegame and settings are copied. The copy is kept as the new world's first backup.</li>
                 <li>
                   The world <b>{s.name}</b> is created on port <span className="mono">{s.port}/udp</span>
-                  {s.copyFrom ? " with game files copied from another world" : ", and its first start downloads the game (about 9 GB)"}.
+                  {s.copyFrom === FROM_SOURCE
+                    ? " and started; its first start checks the copied game files against Steam"
+                    : s.copyFrom
+                      ? " with game files copied from another world"
+                      : ", and its first start downloads the game (about 9 GB)"}
+                  .
                 </li>
                 {stopsContainer && (
                   <>
