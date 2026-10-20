@@ -41,7 +41,8 @@ const spawner: SettingDef = {
   key: "randomSpawnerAmount", label: "Enemy Amount", tab: "enemies", type: "enum", default: "Normal",
   options: [
     { value: "Few", label: "Few" }, { value: "Normal", label: "Normal" },
-    { value: "Many", label: "More" }, { value: "Extreme", label: "Many" },
+    { value: "Automatic", label: "Automatic" }, { value: "Many", label: "Many" },
+    { value: "Extreme", label: "Extreme" },
   ],
   presets: { Default: "Normal", Relaxed: "Few", Hard: "Many", Survival: "Many" }, description: "",
 };
@@ -68,18 +69,18 @@ describe("ns ↔ minutes", () => {
 });
 
 describe("formatValue", () => {
-  it("matches the in-game labels", () => {
+  it("uses the setting's labels", () => {
     expect(formatValue(damage, 2)).toBe("200%");
     expect(formatValue(starving, false)).toBe("Off");
     expect(formatValue(toStarving, 600_000_000_000)).toBe("10min");
-    expect(formatValue(spawner, "Extreme")).toBe("Many");
-    expect(formatValue(spawner, "Many")).toBe("More");
+    expect(formatValue(spawner, "Extreme")).toBe("Extreme");
+    expect(formatValue(spawner, "Automatic")).toBe("Automatic");
     expect(formatValue(damage, null)).toBe("?");
   });
   it("describes ranges", () => {
     expect(rangeText(damage)).toBe("25% – 500%");
     expect(rangeText(toStarving)).toBe("5min – 20min");
-    expect(rangeText(spawner)).toBe("Few · Normal · More · Many");
+    expect(rangeText(spawner)).toBe("Few · Normal · Automatic · Many · Extreme");
   });
 });
 

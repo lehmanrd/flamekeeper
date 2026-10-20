@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -40,6 +41,15 @@ def test_parses_every_setting() -> None:
     assert "LookingForPlayers" in r.tags and len(r.tags) == 19
     assert r.default_document["gameSettings"]["perkUpgradeRecyclingFactor"] == 0.5
     assert r.server_keys[-1] == "bans"
+
+
+def test_option_labels_are_the_readme_names() -> None:
+    """Dropdowns show the readme's option names, in its order, words spaced (issue #9)."""
+    r = _readme()
+    for s in load_schema()["settings"]:
+        if s["type"] == "enum":
+            names = [re.sub(r"(?<=[a-z])(?=[A-Z])", " ", v) for v in r.settings[s["key"]].options]
+            assert [o["label"] for o in s["options"]] == names, s["key"]
 
 
 def test_parses_the_0_9_readme() -> None:

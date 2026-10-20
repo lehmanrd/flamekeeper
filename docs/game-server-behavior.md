@@ -54,6 +54,8 @@ wrote) → start. A stopped world gets saves applied straight away.
   `Automatic` label in game and per-preset values for the new setting aren't checked yet.
 - `curseModifier` accepts only `Easy` (shown in game as "Off"), `Normal` and `Hard`.
 - `randomSpawnerAmount` `"Extreme"` is shown in game as "Many", and `"Many"` as "More".
+  `aggroPoolAmount` `"Few"` is shown in game as "Easy". FlameKeeper's dropdowns use the
+  readme's option names instead, so they match the values in `enshrouded_server.json`.
 - Night length goes up to 60 minutes; `playerBodyHeatFactor` is a continuous 0.5–2 range.
 - The legacy top-level `password` is never written by the image or the server. An empty
   `"password": ""` creates no role, and the server drops the key on its next rewrite.
