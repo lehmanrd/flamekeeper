@@ -442,7 +442,7 @@ function ScheduleCard({ world, schedule, backups }: { world: WorldSummary; sched
       <div className="top" style={{ margin: "14px 0 0" }}>
         <span className="muted" style={{ fontSize: 12 }}>
           {schedule.enabled && schedule.next_run_at ? `Next: ${formatTime(schedule.next_run_at)}` : "Off"} · {retentionText(backups, schedule.retention_count)}
-          {" · "}times in {schedule.timezone}
+          {" · "}schedule runs on {schedule.timezone} time
         </span>
         <span className="spacer" />
         <button className="btn sm" disabled={!dirty || invalid || save.isPending} onClick={() => save.mutate()}>Save schedule</button>
