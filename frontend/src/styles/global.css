@@ -39,6 +39,9 @@ a { color: var(--gold2); }
   display: flex; flex-direction: column; gap: 4px; position: sticky; top: 0; height: 100vh; }
 .brand { font-family: var(--font-display); font-size: 20px; color: var(--gold); padding: 4px 10px 16px;
   display: flex; align-items: center; gap: 8px; text-decoration: none; }
+.side-head { display: flex; align-items: center; justify-content: space-between; padding-bottom: 16px; }
+.side-head .brand { padding-bottom: 0; }
+.side .side-close, .side-backdrop { display: none; }
 .nav { display: flex; flex-direction: column; gap: 2px; overflow-y: auto; }
 .nav a, .nav span.soon { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px;
   color: var(--text); text-decoration: none; }
@@ -268,6 +271,8 @@ table.roles .masked { letter-spacing: .1em; }
   .app { grid-template-columns: 1fr; }
   .side { display: none; position: fixed; inset: 0 auto 0 0; width: 260px; z-index: 20; }
   .side.open { display: flex; }
+  .side .side-close { display: inline-flex; font-size: 16px; }
+  .side-backdrop { display: block; position: fixed; inset: 0; z-index: 15; background: rgba(5, 6, 14, .65); }
   .mobilebar { display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: var(--bg2);
     border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 10; }
   .mobilebar .brand { padding: 0; }
