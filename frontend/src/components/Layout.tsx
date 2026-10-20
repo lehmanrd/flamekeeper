@@ -43,13 +43,29 @@ export function Layout() {
   const [navOpen, setNavOpen] = useState(false);
   const location = useLocation();
   useEffect(() => setNavOpen(false), [location.pathname]);
+  useEffect(() => {
+    if (!navOpen) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setNavOpen(false);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [navOpen]);
 
   const setupError = system?.selfcheck?.fatal_error;
 
   return (
     <div className="app">
-      <aside className={`side${navOpen ? " open" : ""}`}>
-        <Brand />
+      {/* A link to the page already shown doesn't change the path: close the menu anyway. */}
+      <aside
+        id="side-nav"
+        className={`side${navOpen ? " open" : ""}`}
+        onClick={(e) => (e.target as HTMLElement).closest("a") && setNavOpen(false)}
+      >
+        <div className="side-head">
+          <Brand />
+          <button className="btn sm side-close" onClick={() => setNavOpen(false)} aria-label="Close menu">
+            ←
+          </button>
+        </div>
         <nav className="nav" aria-label="Main">
           <NavLink to="/" end>
             <span className="ico">◫</span> Worlds
@@ -98,9 +114,16 @@ export function Layout() {
           {!connected && <span style={{ color: "var(--warn)" }}> · reconnecting…</span>}
         </div>
       </aside>
+      {navOpen && <div className="side-backdrop" onClick={() => setNavOpen(false)} aria-hidden="true" />}
       <div style={{ minWidth: 0 }}>
         <div className="mobilebar">
-          <button className="btn sm" onClick={() => setNavOpen(!navOpen)} aria-label="Menu">
+          <button
+            className="btn sm"
+            onClick={() => setNavOpen(!navOpen)}
+            aria-label="Menu"
+            aria-expanded={navOpen}
+            aria-controls="side-nav"
+          >
             ☰
           </button>
           <Brand />
