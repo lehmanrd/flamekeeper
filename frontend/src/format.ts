@@ -64,6 +64,17 @@ export function formatTime(iso: string | null | undefined, now = new Date()): st
         d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+/** "19:55:47" in the browser's time zone, for log lines. */
+export function formatClock(iso: string | null | undefined): string {
+  if (!iso) return "";
+  return new Date(iso).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+}
+
 export function slugify(name: string): string {
   return (
     name

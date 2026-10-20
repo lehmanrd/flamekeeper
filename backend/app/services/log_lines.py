@@ -33,17 +33,22 @@ def _level(text: str, hint: str | None = None) -> str:
     return "info"
 
 
+def _iso_utc(ts: str) -> str:
+    """The game container's clock as ISO 8601 UTC: it runs with no TZ set."""
+    return ts.replace(" ", "T", 1).replace(",", ".") + "+00:00"
+
+
 def parse_line(raw: str) -> dict[str, Any]:
     line = redact(_ANSI.sub("", raw)).replace("#011", "    ")
     m = _PROGRAM_LINE.match(line)
     if m:
         text = m.group("text")
-        return {"ts": m.group("ts"), "source": m.group("source"), "level": _level(text),
+        return {"ts": _iso_utc(m.group("ts")), "source": m.group("source"), "level": _level(text),
                 "text": text, "player": bool(_PLAYER.search(text))}
     m = _SUPERVISOR_LINE.match(line)
     if m:
         text = m.group("text")
-        return {"ts": m.group("ts"), "source": "supervisord",
+        return {"ts": _iso_utc(m.group("ts")), "source": "supervisord",
                 "level": _level(text, m.group("level")), "text": text, "player": False}
     return {"ts": None, "source": "", "level": _level(line), "text": line, "player": False}
 
