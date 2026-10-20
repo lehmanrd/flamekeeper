@@ -1,5 +1,5 @@
 {
-  "$comment": "Source of truth for the difficulty editor. Tabs, row order, labels and preset values are transcribed from the in-game Difficulty screen. Keys, ranges and option values follow Keen's official 'Server Gameplay Settings' article. Conflict policy: Keen's documentation wins, and every conflict was tested on a real server and the result recorded in a $verified field (see docs/game-server-behavior.md); the shipped default file and the mornedhels docs are secondary. Durations are nanoseconds in JSON, minutes in the UI. Server behavior: out-of-range numbers are clamped; an invalid enum string stops the server from booting.",
+  "$comment": "Source of truth for the difficulty editor. Tabs, row order, setting labels and preset values are transcribed from the in-game Difficulty screen; option labels are the readme's option names (enshrouded_server_readme.txt), which sometimes differ from the in-game wording. Keys, ranges and option values follow Keen's official 'Server Gameplay Settings' article. Conflict policy: Keen's documentation wins, and every conflict was tested on a real server and the result recorded in a $verified field (see docs/game-server-behavior.md); the shipped default file and the mornedhels docs are secondary. Durations are nanoseconds in JSON, minutes in the UI. Server behavior: out-of-range numbers are clamped; an invalid enum string stops the server from booting.",
   "schemaVersion": 1,
   "presetKey": "gameSettingsPreset",
   "presets": [
@@ -172,11 +172,11 @@
       "options": [
         {
           "value": "Few",
-          "label": "Easy"
+          "label": "Few"
         },
         {
           "value": "Normal",
-          "label": "Default"
+          "label": "Normal"
         },
         {
           "value": "Many",
@@ -237,11 +237,11 @@
         },
         {
           "value": "Many",
-          "label": "More"
+          "label": "Many"
         },
         {
           "value": "Extreme",
-          "label": "Many"
+          "label": "Extreme"
         }
       ],
       "presets": {
@@ -250,7 +250,7 @@
         "Hard": "Many",
         "Survival": "Many"
       },
-      "description": "Controls the number of enemies in the world. Automatic (added in 1.0) adjusts it to the game.",
+      "description": "Controls the number of enemies in the world. When Automatic is set, the number of enemies scales depending on the size of the party. A party includes every player actively playing in the vicinity. Players in other areas are not counted as part of the party.",
       "$verified": "Verified on a real server: 'Many' and 'Extreme' boot and are kept. In game, 'Many' shows 'More' and 'Extreme' shows 'Many'. 'Automatic' comes from Keen's 1.0.0.0 readme and hasn't been tested on a real server yet."
     },
     {
@@ -473,16 +473,16 @@
       "default": "AddBackpackMaterials",
       "options": [
         {
-          "value": "NoTombstone",
-          "label": "Keep All"
-        },
-        {
           "value": "AddBackpackMaterials",
-          "label": "Default"
+          "label": "Add Backpack Materials"
         },
         {
           "value": "Everything",
-          "label": "Lose All"
+          "label": "Everything"
+        },
+        {
+          "value": "NoTombstone",
+          "label": "No Tombstone"
         }
       ],
       "presets": {
@@ -491,7 +491,7 @@
         "Hard": "AddBackpackMaterials",
         "Survival": "Everything"
       },
-      "description": "What players lose on death. Default drops backpack materials into a recoverable tombstone; Lose All drops everything; Keep All drops nothing."
+      "description": "What players lose on death. Add Backpack Materials leaves their materials in a tombstone to recover; Everything leaves all their items there; No Tombstone means they keep everything."
     },
     {
       "key": "dayTimeDuration",
@@ -661,7 +661,7 @@
         },
         {
           "value": "Normal",
-          "label": "Default"
+          "label": "Normal"
         },
         {
           "value": "Hard",
@@ -690,15 +690,15 @@
       "options": [
         {
           "value": "Easy",
-          "label": "Off"
+          "label": "Easy"
         },
         {
           "value": "Normal",
-          "label": "Default"
+          "label": "Normal"
         },
         {
           "value": "Hard",
-          "label": "High"
+          "label": "Hard"
         }
       ],
       "presets": {
@@ -707,7 +707,7 @@
         "Hard": "Normal",
         "Survival": "Hard"
       },
-      "description": "Chance of being cursed by the Shroud when attacked. Hard doubles the chance; Off disables curses.",
+      "description": "Chance of being cursed by the Shroud when attacked. Easy turns curses off; Hard doubles the chance.",
       "$verified": "Verified on a real server: server accepts only Easy/Normal/Hard, so mornedhels' 'Off' would stop the server. 'Easy' boots and shows 'Off' in game."
     },
     {
