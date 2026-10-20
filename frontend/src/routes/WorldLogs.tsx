@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { apiUrl } from "../api/client";
 import type { WorldSummary } from "../api/types";
-import { filterLines, type LevelFilter } from "../format";
+import { filterLines, formatClock, type LevelFilter } from "../format";
 import { useLogStream } from "../hooks/live";
 import styles from "./WorldLogs.module.css";
 import { NotFound } from "./NotFound";
@@ -88,7 +88,7 @@ function LogsView({ world }: { world: WorldSummary }) {
         ) : (
           shown.map((l, i) => (
             <div key={i} className={styles[l.level] + (l.player ? ` ${styles.player}` : "")}>
-              <span className={styles.ts}>{l.ts ? l.ts.slice(11, 19) : ""}</span>{" "}
+              <span className={styles.ts}>{formatClock(l.ts)}</span>{" "}
               <span className={styles.src}>{l.source.replace("enshrouded-", "")}</span> {l.text}
             </div>
           ))

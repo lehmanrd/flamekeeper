@@ -6,10 +6,10 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db import Base
+from app.db import Base, UTCDateTime
 
 
 def utcnow() -> datetime:
@@ -50,9 +50,9 @@ class World(Base):
     desired_state: Mapped[str] = mapped_column(String(16), default="stopped")
     config_revision: Mapped[int] = mapped_column(Integer, default=0)
     applied_revision: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+        UTCDateTime, default=utcnow, onupdate=utcnow
     )
 
 
@@ -72,7 +72,7 @@ class Schedule(Base):
     # Backups: delete non-scheduled backups (manual, pre-*, uploaded) older than this
     # many days; 0 keeps them until deleted by hand.
     max_age_days: Mapped[int] = mapped_column(Integer, default=0)
-    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
 
 class Backup(Base):
@@ -82,13 +82,13 @@ class Backup(Base):
     world_id: Mapped[str] = mapped_column(ForeignKey("worlds.id", ondelete="CASCADE"), index=True)
     filename: Mapped[str] = mapped_column(String(300))
     size_bytes: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     kind: Mapped[str] = mapped_column(String(32))
     note: Mapped[str] = mapped_column(Text, default="")
     game_build_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # When the server wrote the savegame in this backup. A running server only saves
     # every few minutes, so this can be earlier than created_at.
-    saved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    saved_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
 
 class Job(Base):
@@ -102,9 +102,9 @@ class Job(Base):
     status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
     progress: Mapped[int | None] = mapped_column(Integer, nullable=True)
     message: Mapped[str] = mapped_column(Text, default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     log: Mapped[str] = mapped_column(Text, default="")
 
 
@@ -113,7 +113,7 @@ class Event(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     world_id: Mapped[str] = mapped_column(ForeignKey("worlds.id", ondelete="CASCADE"), index=True)
-    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    ts: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
     kind: Mapped[str] = mapped_column(String(32))
     data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
@@ -124,8 +124,8 @@ class PlayerSession(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     world_id: Mapped[str] = mapped_column(ForeignKey("worlds.id", ondelete="CASCADE"), index=True)
     player_name: Mapped[str] = mapped_column(String(200))
-    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    left_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    joined_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    left_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
 
 class MetricSample(Base):
@@ -134,7 +134,7 @@ class MetricSample(Base):
     world_id: Mapped[str] = mapped_column(
         ForeignKey("worlds.id", ondelete="CASCADE"), primary_key=True
     )
-    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    ts: Mapped[datetime] = mapped_column(UTCDateTime, primary_key=True)
     cpu_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     mem_mb: Mapped[float | None] = mapped_column(Float, nullable=True)
     net_rx_bps: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -159,7 +159,7 @@ class User(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     username: Mapped[str] = mapped_column(String(64), unique=True)
     password_hash: Mapped[str] = mapped_column(String(255))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
 class AuthSession(Base):
@@ -169,8 +169,8 @@ class AuthSession(Base):
 
     token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime)
 
 
 class WorldImport(Base):
@@ -194,4 +194,4 @@ class WorldImport(Base):
     was_running: Mapped[bool] = mapped_column(Boolean, default=False)
     # importing | imported | rolled_back | container_removed | volumes_removed | dismissed
     state: Mapped[str] = mapped_column(String(32), default="importing")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)

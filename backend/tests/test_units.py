@@ -132,6 +132,10 @@ def test_parse_line_structure() -> None:
     assert line["text"] == "[Session] 'HostOnline' (up)!"
     sup = parse_line(SUPERVISOR)
     assert sup["source"] == "supervisord" and sup["level"] == "info"
+    # The game container runs in UTC: say so, so the browser shows local time.
+    assert line["ts"] == "2026-10-14T19:55:47.419+00:00"
+    assert sup["ts"] == "2026-10-14T19:55:37.110+00:00"
+    assert parse_line("plain")["ts"] is None
     assert parse_line(BAD_CONFIG)["level"] == "error"
     assert parse_line("plain")["text"] == "plain"
     assert "#033" not in parse_line("2026-10-14 19:54:46.205 supervisord: "

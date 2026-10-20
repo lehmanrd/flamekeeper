@@ -46,6 +46,24 @@ def test_reconcile_adopts_labeled_and_ignores_unlabeled(
     assert fake_docker._find("someone-elses") is not None
 
 
+def test_stored_times_are_served_as_utc(
+    settings: Settings, fake_docker: FakeDockerAdapter
+) -> None:
+    """SQLite drops the offset: without it, browsers read the times as local (issue #6)."""
+    async def seed() -> None:
+        await fake_docker.create_container(_spec(
+            "flamekeeper-orphan",
+            {"flamekeeper.managed": "true", "flamekeeper.world_id": "w-orphan"},
+        ))
+
+    asyncio.run(seed())
+    app = create_app(settings, docker=fake_docker, poll_interval=0.05)
+    with admin_client(app, settings) as client:
+        events = client.get("/api/worlds/orphan/events").json()
+        assert events and all(e["ts"].endswith("+00:00") for e in events)
+        assert client.get("/api/worlds/orphan").json()["created_at"].endswith("+00:00")
+
+
 def test_controller_restart_leaves_game_running_and_readopts(
     settings: Settings, fake_docker: FakeDockerAdapter
 ) -> None:
