@@ -6,6 +6,10 @@ FK_REPO="__FK_REPO__"
 FK_INSTALL_DIR="${FK_INSTALL_DIR:-__FK_INSTALL_DIR__}"
 [[ "$FK_INSTALL_DIR" == __*__ ]] && FK_INSTALL_DIR=/opt/flamekeeper
 ENV_FILE="$FK_INSTALL_DIR/.env"
+# Updates requested from the web UI: the request comes in through DATA_DIR/self-update,
+# the log and result go out through here (root's; read-only in the controller).
+UPDATE_DIR="$FK_INSTALL_DIR/self-update"
+SYSTEMD_DIR="${FK_SYSTEMD_DIR:-/etc/systemd/system}"
 
 die() {
   printf 'flamekeeper: %s\n' "$*" >&2
@@ -27,6 +31,7 @@ Usage: flamekeeper <command>
                       password). Signs everyone out.
   uninstall [--purge] Remove the controller. --purge also deletes all game servers,
                       saves and backups.
+  update-request      (Run by systemd) Carry out an update requested in the web UI
   version             Show the installed version
 EOF
 }
@@ -106,8 +111,81 @@ cmd_update() {
   local tmp
   tmp="$(mktemp)"
   curl -fsSL "$url" -o "$tmp" || die "download failed"
-  FK_INSTALL_DIR="$FK_INSTALL_DIR" bash "$tmp" "${args[@]}"
+  # The installer's status, explicitly: set -e doesn't apply when the caller tests
+  # this function (update-request runs it as `(cmd_update …) || rc=$?`).
+  local rc=0
+  FK_INSTALL_DIR="$FK_INSTALL_DIR" bash "$tmp" "${args[@]}" || rc=$?
   rm -f "$tmp"
+  return "$rc"
+}
+
+# newer A B: version A is newer than version B
+newer() {
+  [[ "$1" != "$2" && "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1)" == "$1" ]]
+}
+
+# write_status ID VERSION STATE [EXIT_CODE] [ERROR]: the result the controller reads.
+write_status() {
+  local tmp
+  tmp="$(mktemp "$UPDATE_DIR/.status.XXXXXX")"
+  printf '{"id": "%s", "version": "%s", "state": "%s", "exit_code": %s, "error": "%s", "at": "%s"}\n' \
+    "$1" "$2" "$3" "${4:-null}" "${5:-}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$tmp"
+  chmod 0644 "$tmp"
+  mv -f "$tmp" "$UPDATE_DIR/status.json"
+}
+
+# An update requested in the web UI (flamekeeper-update.service, started by
+# flamekeeper-update.path when DATA_DIR/self-update/request appears). FlameKeeper can write
+# anything in DATA_DIR, so the request is read as untrusted input: a regular file, a
+# release version newer than the installed one, and nothing else. See docs/socket-proxy.md.
+cmd_update_request() {
+  [[ "$(id -u)" -eq 0 ]] || die "update-request runs as root (from systemd)"
+  local data_dir dir req line version id extra current rc
+  data_dir="$(env_get DATA_DIR)"
+  [[ "$data_dir" == /* ]] || die "DATA_DIR isn't set in $ENV_FILE"
+  dir="$data_dir/self-update"
+  req="$dir/request"
+  # A symlinked folder could point the rm below somewhere else.
+  [[ "$(realpath -e "$dir" 2>/dev/null)" == "$dir" ]] || die "$dir isn't a plain folder"
+  if [[ ! -f "$req" || -L "$req" ]]; then
+    rm -f -- "$req"
+    die "no update request in $dir"
+  fi
+  line="$(timeout 5 head -c 100 -- "$req" 2>/dev/null | head -n1 || true)"
+  rm -f -- "$req"
+  read -r version id extra <<<"$line" || true
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$id" =~ ^[0-9a-f]{16}$ && -z "${extra:-}" ]] ||
+    die "ignoring a malformed update request"
+
+  mkdir -p "$UPDATE_DIR"
+  chmod 0755 "$UPDATE_DIR"
+  current="$(env_get FLAMEKEEPER_IMAGE)"
+  current="${current##*:}"
+  # Development images (flamekeeper:dev) have no version to compare with.
+  if [[ "$current" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && ! newer "$version" "$current"; then
+    write_status "$id" "$version" failed null "$version isn't newer than the installed $current"
+    die "refusing to update to $version: not newer than $current"
+  fi
+
+  write_status "$id" "$version" running
+  : >"$UPDATE_DIR/update.log"
+  chmod 0644 "$UPDATE_DIR/update.log"
+  rc=0
+  (cmd_update --version "$version" --no-firewall) >>"$UPDATE_DIR/update.log" 2>&1 || rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    write_status "$id" "$version" succeeded 0
+  else
+    write_status "$id" "$version" failed "$rc"
+  fi
+  return "$rc"
+}
+
+remove_updater() {
+  if command -v systemctl >/dev/null 2>&1 && [[ -f "$SYSTEMD_DIR/flamekeeper-update.path" ]]; then
+    systemctl disable --now flamekeeper-update.path >/dev/null 2>&1 || true
+  fi
+  rm -f "$SYSTEMD_DIR/flamekeeper-update.path" "$SYSTEMD_DIR/flamekeeper-update.service"
+  command -v systemctl >/dev/null 2>&1 && systemctl daemon-reload >/dev/null 2>&1 || true
 }
 
 cmd_doctor() {
@@ -144,6 +222,7 @@ cmd_uninstall() {
     [[ "$answer" == "flamekeeper" ]] || die "aborted"
   fi
   [[ -f "$FK_INSTALL_DIR/docker-compose.yml" ]] && compose down || true
+  remove_updater
   if [[ "$purge" == 1 ]]; then
     local ids=()
     mapfile -t ids < <(dk ps -aq --filter label=flamekeeper.managed=true)
@@ -187,6 +266,7 @@ main() {
     stop) compose stop ;;
     restart) compose up -d --force-recreate ;;
     update) cmd_update "$@" ;;
+    update-request) cmd_update_request ;;
     doctor) cmd_doctor ;;
     reset-admin) cmd_reset_admin ;;
     uninstall) cmd_uninstall "$@" ;;

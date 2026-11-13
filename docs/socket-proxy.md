@@ -1,6 +1,6 @@
 # Docker socket proxy
 
-Status: **steps 1–2 done** (see Steps). This is the plan for taking the Docker socket
+Status: **steps 1–3 done** (see Steps). This is the plan for taking the Docker socket
 away from the FlameKeeper container.
 
 ## Why
@@ -142,10 +142,20 @@ and the UI tells the user to run it when the proxy refuses an import.
 2. **ntsync check** (done in step 2): a helper started with `devices=["/dev/ntsync"]`;
    Docker refuses to start it when the host lacks the device. `run_helper` now removes its
    container even when the start fails.
-3. **Self-update**: the UI writes `DATA_DIR/self-update/request.json` with `{version}`; a
-   systemd `.path` unit installed by the installer runs `flamekeeper update --version X`,
-   which re-checks the version is a newer GitHub release. Without systemd the UI says to run
-   `flamekeeper update` on the host. `run_detached`, `privileged` and `pid_host` go away.
+3. **Self-update** (done in step 3): the controller writes `VERSION REQUEST_ID` to
+   `DATA_DIR/self-update/request`. The installer's `flamekeeper-update.path` unit starts
+   `flamekeeper-update.service`, which runs `flamekeeper update-request` as root. That
+   treats the file as hostile (FlameKeeper can write anything in `DATA_DIR`): no symlinks,
+   FIFOs or symlinked folder, at most 100 bytes, `^\d+\.\d+\.\d+$` and a 16-hex ID,
+   a version newer than the installed one, and the download only exists for a real
+   release tag. The log and `status.json` go to `/opt/flamekeeper/self-update`, mounted
+   **read-only** into the controller: if root wrote them into `DATA_DIR`, the controller
+   could replace `update.log` with a symlink to `/etc/passwd`. The controller fails the
+   run if nothing picks up the request within 90 seconds, and removes it so it can't
+   fire later. Without systemd the installer leaves no `updater` marker and the UI says
+   to run `sudo flamekeeper update`. `run_detached`, `privileged` and `pid_host` are gone;
+   the proxy still lets FlameKeeper remove an old `flamekeeper.role=self-update`
+   container, which a controller updated by the old helper does once.
 
 ## Compose (installer template, step 4)
 
@@ -201,7 +211,13 @@ Existing installs move over on their next update: the current self-update runs
    without a grant both imports are refused. The run found that the proxy's
    unprivileged user couldn't look inside FlameKeeper's `0700` import folders, so the
    proxy now runs as root with only `CAP_DAC_READ_SEARCH`.
-3. Host-side self-update.
+3. **Host-side self-update** — done (code change 3 above). Unit and installer tests cover
+   hostile requests (injection-shaped versions, symlinks, FIFOs, a symlinked folder,
+   downgrades). `e2e-clean-host.sh` checks the unit on real systemd and that a malformed
+   request is refused without running anything; `e2e-self-update.sh` updated a 0.0.1
+   install to the 0.6.3 release through the UI's API via the unit, with no helper
+   container. Writing it also found that `flamekeeper update` reported success when the
+   installer failed, if its caller tested its status (`set -e` doesn't apply there).
 4. Enforce mode in the installer's compose; drop the socket from FlameKeeper.
 5. Later: non-root FlameKeeper (closes the symlink race).
 

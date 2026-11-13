@@ -13,6 +13,8 @@ services:
       # Same path inside and outside: game containers are created through the
       # host's Docker, which needs host paths.
       - ${DATA_DIR}:${DATA_DIR}
+      # Updates from the web UI: the host's log and result (docs/socket-proxy.md).
+      - __FK_INSTALL_DIR__/self-update:/var/lib/flamekeeper/host-update:ro
     environment:
       - DATA_DIR=${DATA_DIR}
       - TZ=${TZ}

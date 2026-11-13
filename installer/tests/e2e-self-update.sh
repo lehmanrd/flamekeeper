@@ -34,6 +34,8 @@ on_host "bash install.sh --yes --no-firewall --image $image" >/dev/null 2>&1 || 
 docker save "$image" | docker exec -i "$name" docker load -q >/dev/null
 on_host "FLAMEKEEPER_ADMIN_PASSWORD=e2e-password bash install.sh --yes --no-firewall --image $image --admin-user keeper" | grep "admin account"
 on_host 'sudo grep FLAMEKEEPER_CLI /opt/flamekeeper/docker-compose.yml'
+on_host 'systemctl is-active flamekeeper-update.path' | grep -qx active
+echo "   flamekeeper-update.path is active"
 
 api() { on_host "curl -fsS -b cj -c cj -H 'X-FlameKeeper: 1' -H 'Content-Type: application/json' $*"; }
 api "-d '{\"username\": \"keeper\", \"password\": \"e2e-password\"}' localhost:8080/api/auth/login" >/dev/null
@@ -48,9 +50,20 @@ for _ in $(seq 1 120); do
   [[ "$version" == "$latest" ]] && break
   sleep 3
 done
-[[ "$version" == "$latest" ]] || { echo "controller did not come back as $latest"; on_host 'sudo cat /srv/flamekeeper/self-update/update.log' || true; exit 1; }
+[[ "$version" == "$latest" ]] || {
+  echo "controller did not come back as $latest"
+  on_host 'sudo journalctl -u flamekeeper-update.service --no-pager | tail -20; sudo cat /opt/flamekeeper/self-update/update.log' || true
+  exit 1
+}
 echo "   controller now reports $version"
+# Carried out by the host's systemd unit, not by a privileged container.
+on_host 'sudo cat /opt/flamekeeper/self-update/status.json' | tee /dev/stderr | grep -q '"state": "succeeded"'
+on_host 'test ! -e /srv/flamekeeper/self-update/request'
+on_host 'sudo docker ps -a --format "{{.Names}}"' | grep -q flamekeeper-self-update &&
+  { echo "unexpected: a self-update helper container"; exit 1; }
+on_host 'sudo journalctl -u flamekeeper-update.service --no-pager -o cat | grep -m1 -E "Started|Finished|Starting"'
+
 on_host 'sudo grep FLAMEKEEPER_IMAGE /opt/flamekeeper/.env'
 on_host 'sudo docker inspect flamekeeper --format "   running image {{.Config.Image}}"'
-on_host 'sudo tail -4 /srv/flamekeeper/self-update/update.log'
+on_host 'sudo tail -4 /opt/flamekeeper/self-update/update.log'
 echo "== PASS"

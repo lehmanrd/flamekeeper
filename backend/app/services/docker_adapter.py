@@ -137,16 +137,6 @@ class DockerAdapter(Protocol):
         ro_mounts: dict[str, str] | None = None,
         devices: list[str] | None = None,
     ) -> ExecResult: ...
-    async def run_detached(
-        self,
-        name: str,
-        image: str,
-        cmd: list[str],
-        *,
-        labels: dict[str, str],
-        privileged: bool = False,
-        pid_host: bool = False,
-    ) -> ContainerInfo: ...
     async def stats(self, name_or_id: str) -> ContainerStats | None: ...
     async def local_digest(self, image: str) -> str | None: ...
     async def registry_digest(self, image: str) -> str | None: ...
@@ -581,27 +571,6 @@ class RealDockerAdapter:
                 return ExecResult(int(result.get("StatusCode", 1)), out)
             finally:
                 c.remove(force=True)
-
-        return await self._run(_do)
-
-    async def run_detached(
-        self,
-        name: str,
-        image: str,
-        cmd: list[str],
-        *,
-        labels: dict[str, str],
-        privileged: bool = False,
-        pid_host: bool = False,
-    ) -> ContainerInfo:
-        """Start a container and return at once; it's left for the caller to remove."""
-
-        def _do() -> ContainerInfo:
-            c = self.client.containers.run(
-                image, cmd, name=name, detach=True, labels=labels, privileged=privileged,
-                pid_mode="host" if pid_host else None,
-            )
-            return self._info(self.client.containers.get(c.id))
 
         return await self._run(_do)
 

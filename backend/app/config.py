@@ -65,6 +65,8 @@ class Settings(BaseSettings):
     flamekeeper_version: str = "dev"
     flamekeeper_repo: str = "lehmanrd/flamekeeper"
     flamekeeper_cli: str = ""
+    # The host's update log and result (installer: /opt/flamekeeper/self-update, read-only).
+    host_update_dir: Path = Path("/var/lib/flamekeeper/host-update")
     check_for_app_updates: bool = True
     metrics_retention_days: int = 7
     # Skip the DATA_DIR path-match check (development only).

@@ -94,13 +94,17 @@ Settings, worlds and backups are kept. Discord gets a message when a release is 
 when the update finishes (or fails).
 
 The button runs `flamekeeper update` on the server for you, so it's only offered on
-installs made with the installer; otherwise the card shows what to run. To do it from a
+installs made with the installer on a host with systemd; otherwise the card shows what to
+run. To do it from a
 terminal instead: `sudo flamekeeper update`. To stop the checks, turn off "Check GitHub
 for new FlameKeeper releases" under Settings → Defaults & checks.
 
-How it works: a container can't replace itself, so FlameKeeper starts a short-lived helper
-container (privileged, in the host's process namespace) that runs the host's
-`flamekeeper update --version X`. The output is kept in `<data dir>/self-update/update.log`.
+How it works: a container can't replace itself, and FlameKeeper has no root on the host,
+so it only asks. It writes the version to `<data dir>/self-update/request`; the
+`flamekeeper-update.path` systemd unit the installer sets up notices, checks it's a real
+release newer than the installed one, and runs `flamekeeper update --version X`. The
+output is kept in `/opt/flamekeeper/self-update/update.log` (`journalctl -u
+flamekeeper-update` shows when it ran).
 
 ## Signing in
 

@@ -48,6 +48,21 @@ on_host "curl -fsSL file:///home/gamer/install.sh | FLAMEKEEPER_ADMIN_PASSWORD=e
 on_host 'sudo grep FLAMEKEEPER_PORT /opt/flamekeeper/.env'
 on_host 'curl -fsS localhost:8088/api/health >/dev/null && echo "   health ok on 8088"'
 
+echo "== updates from the web UI: systemd path unit"
+on_host 'systemctl is-active flamekeeper-update.path' | grep -qx active
+on_host 'sudo cat /opt/flamekeeper/self-update/updater' | grep -qx systemd
+on_host "sudo docker inspect flamekeeper --format '{{range .Mounts}}{{.Source}}:{{.Destination}}:{{.RW}} {{end}}'" |
+  grep -q "/opt/flamekeeper/self-update:/var/lib/flamekeeper/host-update:false"
+echo "   flamekeeper-update.path active; host folder mounted read-only"
+# The request file is written by the controller, so the host treats it as hostile.
+# shellcheck disable=SC2016  # ${IFS} is meant literally: an injection attempt
+on_host 'echo "0.0.0;touch\${IFS}/tmp/pwned 0123456789abcdef" | sudo tee /srv/flamekeeper/self-update/request >/dev/null'
+for _ in $(seq 1 20); do on_host 'test -e /srv/flamekeeper/self-update/request' || break; sleep 1; done
+on_host 'test ! -e /srv/flamekeeper/self-update/request && test ! -e /tmp/pwned'
+on_host 'sudo journalctl -u flamekeeper-update.service --no-pager -o cat' | grep -q "malformed update request"
+on_host 'sudo test ! -e /opt/flamekeeper/self-update/status.json'
+echo "   a malformed request is removed and refused"
+
 echo "== CLI"
 on_host 'flamekeeper status'
 on_host 'flamekeeper doctor'
@@ -58,4 +73,5 @@ on_host "curl -fsSL file:///home/gamer/install.sh | bash -s -- --yes --no-firewa
 echo "   upgrade with an admin: no setup hint"
 on_host 'sudo flamekeeper uninstall'
 on_host 'test ! -e /opt/flamekeeper && test ! -e /usr/local/bin/flamekeeper && sudo test -d /srv/flamekeeper && echo "   uninstall removed controller, kept data"'
+on_host 'test ! -e /etc/systemd/system/flamekeeper-update.path && ! systemctl is-active --quiet flamekeeper-update.path && echo "   uninstall removed the update unit"'
 echo "== PASS"

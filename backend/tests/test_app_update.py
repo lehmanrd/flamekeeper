@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import socket
+from datetime import timedelta
+from pathlib import Path
 
 import httpx
 import pytest
@@ -10,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
-from app.services.app_update import HELPER_NAME, parse_version
+from app.services.app_update import LEGACY_HELPER_NAME, parse_version
 from app.services.docker_adapter import ContainerInfo
 from app.services.docker_fake import FakeDockerAdapter
 from app.services.notifications import EVENTS
@@ -35,8 +38,12 @@ class Calls:
 
 
 def _setup(c: TestClient, settings: Settings, fake: FakeDockerAdapter, *, version: str = "0.4.1",
-           cli: str = "/usr/local/bin/flamekeeper") -> Calls:
+           cli: str = "/usr/local/bin/flamekeeper", updater: bool = True) -> Calls:
     settings.flamekeeper_version, settings.flamekeeper_cli = version, cli
+    settings.host_update_dir = settings.data_dir.parent / "opt-self-update"
+    settings.host_update_dir.mkdir(exist_ok=True)
+    if updater:  # the installer found systemd and installed flamekeeper-update.path
+        (settings.host_update_dir / "updater").write_text("systemd\n")
     calls = Calls()
     updater = c.app.state.services.app_update
     updater.fetch = calls.fetch
@@ -92,11 +99,33 @@ def test_who_can_update(client: TestClient, settings: Settings,
     res = client.post("/api/system/update", json={"version": "0.5.0"})
     assert res.status_code == 409 and "installer" in res.json()["detail"]
 
+    settings.flamekeeper_version, settings.flamekeeper_cli = "0.4.1", "/usr/local/bin/flamekeeper"
+    (settings.host_update_dir / "updater").unlink()  # no systemd on this host
+    st = client.get("/api/system/update").json()
+    assert not st["can_update"] and "systemd" in st["cannot_update_reason"]
+
     settings.flamekeeper_version = "0.5.0"  # already on the latest
     assert not client.get("/api/system/update").json()["update_available"]
 
 
-def test_update_runs_the_host_cli_and_reports_a_failure(
+def _request(settings: Settings) -> tuple[str, str]:
+    """What the controller asked the host for: (version, request id)."""
+    version, rid = (settings.data_dir / "self-update" / "request").read_text().split()
+    return version, rid
+
+
+def _host_reports(settings: Settings, rid: str, state: str, exit_code: int | None = None,
+                  error: str = "", log: str | None = None) -> None:
+    """What `flamekeeper update-request` writes on the host."""
+    host: Path = settings.host_update_dir
+    if log is not None:
+        (host / "update.log").write_text(log)
+    (host / "status.json").write_text(json.dumps(
+        {"id": rid, "version": "0.5.0", "state": state, "exit_code": exit_code,
+         "error": error, "at": "2026-11-13T00:00:00Z"}))
+
+
+def test_update_asks_the_host_and_reports_a_failure(
         client: TestClient, settings: Settings, fake_docker: FakeDockerAdapter) -> None:
     calls = _setup(client, settings, fake_docker)
     client.post("/api/system/update/check")
@@ -106,45 +135,104 @@ def test_update_runs_the_host_cli_and_reports_a_failure(
     assert res.status_code == 202, res.text
     run = res.json()["run"]
     assert run["status"] == "running" and (run["from"], run["to"]) == ("0.4.1", "0.5.0")
-    [(name, image, cmd, privileged, pid_host)] = fake_docker.detached
-    assert (name, image, privileged, pid_host) == (HELPER_NAME, OWN_IMAGE, True, True)
-    assert cmd[:3] == ["nsenter", "-t", "1"]
-    log = settings.data_dir / "self-update" / "update.log"
-    assert cmd[-1] == (f"/usr/local/bin/flamekeeper update --version 0.5.0 --no-firewall "
-                       f">{log} 2>&1")
+    # Only a request file: no container, nothing privileged.
+    version, rid = _request(settings)
+    assert version == "0.5.0" and len(rid) == 16 and run["request_id"] == rid
+    assert not fake_docker.containers.get(LEGACY_HELPER_NAME)
     assert client.post("/api/system/update", json={"version": "0.5.0"}).status_code == 409
 
-    log.write_text("==> Starting FlameKeeper\n\x1b[31mflamekeeper: download failed\x1b[0m\n")
-    fake_docker.finish_detached(HELPER_NAME, 1)
+    # The host takes the request (removing it), then the installer fails.
+    (settings.data_dir / "self-update" / "request").unlink()
+    _host_reports(settings, rid, "running", log="==> Starting FlameKeeper\n")
+    _host_reports(settings, "0" * 16, "succeeded", 0)  # someone else's request: ignored
+    _host_reports(settings, rid, "failed", 1,
+                  log="==> Starting FlameKeeper\n\x1b[31mflamekeeper: download failed\x1b[0m\n")
     run = wait_for(lambda: (r := client.get("/api/system/update").json()["run"])["status"]
                    != "running" and r)
-    assert run["status"] == "failed" and "download failed" in run["error"]
+    assert run["status"] == "failed" and "exit code 1" in run["error"]
+    assert "download failed" in run["error"]
     assert run["log_tail"].endswith("flamekeeper: download failed")
-    assert fake_docker._find(HELPER_NAME) is None
     assert calls.app_events[-1][0] == "app_updated" and not calls.app_events[-1][1]["ok"]
+
+
+def test_host_refusal_is_shown(client: TestClient, settings: Settings,
+                               fake_docker: FakeDockerAdapter) -> None:
+    _setup(client, settings, fake_docker)
+    client.post("/api/system/update/check")
+    client.post("/api/system/update", json={"version": "0.5.0"})
+    _, rid = _request(settings)
+    _host_reports(settings, rid, "failed", None, error="0.5.0 isn't newer than the installed 0.5.0")
+    run = wait_for(lambda: (r := client.get("/api/system/update").json()["run"])["status"]
+                   != "running" and r)
+    assert run["error"] == "The update failed. 0.5.0 isn't newer than the installed 0.5.0"
+
+
+def test_nobody_picks_up_the_request(client: TestClient, settings: Settings,
+                                     fake_docker: FakeDockerAdapter) -> None:
+    _setup(client, settings, fake_docker)
+    client.app.state.services.app_update.pickup_timeout = timedelta(seconds=0.2)
+    client.post("/api/system/update/check")
+    client.post("/api/system/update", json={"version": "0.5.0"})
+    run = wait_for(lambda: (r := client.get("/api/system/update").json()["run"])["status"]
+                   != "running" and r)
+    assert run["status"] == "failed" and "didn't pick up" in run["error"]
+    assert "sudo flamekeeper update" in run["error"]
+    # A request left behind would update the server later, unexpectedly.
+    assert not (settings.data_dir / "self-update" / "request").exists()
 
 
 def test_the_new_controller_finishes_the_update(settings: Settings,
                                                fake_docker: FakeDockerAdapter) -> None:
-    """The old controller starts the helper and is replaced; the new one records the result."""
+    """The old controller asks the host and is replaced; the new one records the result."""
     with admin_client(create_app(settings, docker=fake_docker, poll_interval=0.05),
                       settings) as old:
         _setup(old, settings, fake_docker)
         old.post("/api/system/update/check")
         assert old.post("/api/system/update", json={"version": "0.5.0"}).status_code == 202
+    _, rid = _request(settings)
+    (settings.data_dir / "self-update" / "request").unlink()
+    _host_reports(settings, rid, "running")
 
     settings.flamekeeper_version = "0.5.0"
     with admin_client(create_app(settings, docker=fake_docker, poll_interval=0.05),
                       settings) as new:
         calls = _setup(new, settings, fake_docker, version="0.5.0")
         assert new.get("/api/system/update").json()["run"]["status"] == "running"
-        fake_docker.finish_detached(HELPER_NAME, 0)
+        _host_reports(settings, rid, "succeeded", 0, log="FlameKeeper is ready.\n")
         run = wait_for(lambda: (r := new.get("/api/system/update").json()["run"])["status"]
                        != "running" and r)
         assert run["status"] == "succeeded" and run["error"] is None
+        assert run["log_tail"] == "FlameKeeper is ready."
         assert calls.app_events == [("app_updated", {"ok": True, "from": "0.4.1",
                                                      "to": "0.5.0", "error": None})]
         assert not new.get("/api/system/update").json()["update_available"]
+
+
+def test_finishes_a_run_started_by_the_old_privileged_helper(
+        settings: Settings, fake_docker: FakeDockerAdapter) -> None:
+    """Updating *to* this version was done by the old helper container; this controller
+    records that run and removes the helper."""
+    from app.db import session_scope
+    from app.models import AppSetting
+
+    settings.flamekeeper_version = "0.5.0"
+    with admin_client(create_app(settings, docker=fake_docker, poll_interval=0.05),
+                      settings) as c:
+        _setup(c, settings, fake_docker, version="0.5.0")
+        with session_scope() as s:
+            s.merge(AppSetting(key="app_update", value={"run": {
+                "status": "running", "from": "0.4.1", "to": "0.5.0",
+                "started_at": "2026-11-13T00:00:00+00:00", "finished_at": None,
+                "error": None, "log_tail": None}}))
+        fake_docker.containers["helper"] = ContainerInfo(
+            id="helper", name=LEGACY_HELPER_NAME, image=OWN_IMAGE,
+            labels={"flamekeeper.role": "self-update"}, status="exited", exit_code=0)
+        updater = c.app.state.services.app_update
+        updater.load()
+        c.portal.call(updater.start)  # as at startup, on the app's event loop
+        run = wait_for(lambda: (r := c.get("/api/system/update").json()["run"])["status"]
+                       != "running" and r)
+        assert run["status"] == "succeeded" and fake_docker._find(LEGACY_HELPER_NAME) is None
 
 
 @pytest.mark.parametrize("seen,expected", [(None, True), (list(EVENTS), False)])
