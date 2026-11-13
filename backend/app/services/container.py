@@ -18,6 +18,7 @@ from app.services.jobs import JobManager
 from app.services.metrics import MetricsService
 from app.services.monitor import Monitor
 from app.services.notifications import Notifier
+from app.services.restart_schedule import RestartScheduler
 from app.services.scheduler import Scheduler
 from app.services.selfcheck import SelfCheckResult
 from app.services.update_service import UpdateService
@@ -35,6 +36,7 @@ class Services:
     worlds: WorldService
     monitor: Monitor
     backups: BackupService
+    restarts: RestartScheduler
     scheduler: Scheduler
     updates: UpdateService
     metrics: MetricsService
@@ -66,7 +68,8 @@ class Services:
         app_settings = AppSettings(settings)
         monitor.metrics = metrics
         monitor.update_summary = updates.summary
-        scheduler = Scheduler(worlds, backups, updates,
+        restarts = RestartScheduler(worlds, docker, jobs, events)
+        scheduler = Scheduler(worlds, backups, updates, restarts,
                               **({"tick": poll_interval} if poll_interval else {}))
         auth = AuthService(settings.data_dir)
 
@@ -83,5 +86,5 @@ class Services:
                                 **({"poll_s": poll_interval} if poll_interval else {}))
         imports = ImportService(settings, docker, worlds, backups, jobs, events)
         return cls(settings, docker, bus, jobs, events, config, worlds, monitor, backups,
-                   scheduler, updates, metrics, app_settings, auth, notifier, app_update,
+                   restarts, scheduler, updates, metrics, app_settings, auth, notifier, app_update,
                    imports)

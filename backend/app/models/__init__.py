@@ -73,6 +73,12 @@ class Schedule(Base):
     # many days; 0 keeps them until deleted by hand.
     max_age_days: Mapped[int] = mapped_column(Integer, default=0)
     last_run_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    # Restarts: with only_when_empty, how long to wait for players to leave, and then
+    # "skip" this slot or "restart" anyway.
+    max_wait_min: Mapped[int] = mapped_column(Integer, default=120)
+    if_still_busy: Mapped[str] = mapped_column(String(16), default="skip")
+    # Restarts: skip a slot when the server came online less than this many hours ago.
+    min_uptime_h: Mapped[int] = mapped_column(Integer, default=2)
 
 
 class Backup(Base):

@@ -4,8 +4,8 @@ A self-hosted web app to create, run and monitor **Enshrouded dedicated servers*
 Linux. Each world runs in its own [`mornedhels/enshrouded-server`](https://github.com/mornedhels/enshrouded-server)
 container; FlameKeeper creates and manages those containers for you.
 
-- **Worlds:** a new-world wizard, several worlds side by side, start/stop/restart, live
-  status, player counts and logs.
+- **Worlds:** a new-world wizard, several worlds side by side, start/stop/restart,
+  scheduled restarts, live status, player counts and logs.
 - **Settings:** difficulty presets or custom values for every option, roles and passwords,
   server name, chat and tags, with history and import/export.
 - **Backups:** scheduled and manual, download and upload, restore, and new worlds cloned
@@ -128,8 +128,8 @@ signs everyone out. Game servers keep running.
 ## Notifications
 
 Settings → Discord notifications posts to a Discord channel through a webhook: servers
-coming online, crashing or stopping, players joining or leaving, updates, restores, and
-anything that fails. Pick which ones you want, and use "Send test" to check it works.
+coming online, crashing or stopping, players joining or leaving, updates, restores,
+scheduled restarts, and anything that fails. Pick which ones you want, and use "Send test" to check it works.
 
 ## Security
 
@@ -228,6 +228,24 @@ has a policy: manual, immediately, when nobody is online (the default), or in a
 maintenance window. An update stops the server (it saves), backs it up, runs the image's
 updater and waits until the server is back online. Container image updates are checked
 daily and are notify-only by default.
+
+## Scheduled restarts
+
+Enshrouded servers can get less stable the longer they run. A world's Server page can
+restart it on a schedule: daily at 05:00 by default, or any cron expression (at most once
+an hour, in the controller's time zone). It's off until you turn it on. The restart is the
+same as the Restart button: the server saves, stops, and starts again with any pending
+settings.
+
+- **Players online:** by default it waits up to 2 hours for everyone to leave and skips
+  that restart if they haven't. It can also restart anyway once the wait is over, or
+  straight away.
+- **Recent starts:** it skips a restart when the server came up less than 2 hours before
+  (after a start, an update or a crash), since a fresh server doesn't need it.
+- A stopped world isn't started, and a restart waits while a backup or update is running.
+
+Enshrouded has no way to warn players in game. Turn on "Scheduled restart" in the Discord
+notifications to post each restart, and the reason when one is skipped.
 
 ## Players
 

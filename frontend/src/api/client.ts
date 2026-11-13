@@ -35,6 +35,8 @@ import type {
   RevisionMeta,
   SaveResponse,
   ScheduleUpdate,
+  RestartSchedule,
+  RestartScheduleUpdate,
   SettingsReadmeReport,
   SystemInfo,
   WorldDetail,
@@ -230,6 +232,9 @@ export const api = {
   dismissImport: (id: string) => request<void>("POST", `/worlds/${id}/import/dismiss`),
   updateBackupSchedule: (id: string, body: ScheduleUpdate) =>
     request<BackupSchedule>("PUT", `/worlds/${id}/schedules/backup`, body),
+  restartSchedule: (id: string) => request<RestartSchedule>("GET", `/worlds/${id}/schedules/restart`),
+  updateRestartSchedule: (id: string, body: RestartScheduleUpdate) =>
+    request<RestartSchedule>("PUT", `/worlds/${id}/schedules/restart`, body),
   revealPassword: (id: string, index: number) =>
     request<{ index: number; name: string; password: string }>("POST", `/worlds/${id}/roles/${index}/reveal`),
   events: (id: string, limit = 30, kinds: string[] = [], before?: number) => {

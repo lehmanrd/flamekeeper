@@ -18,9 +18,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import or_, select
-from tzlocal import get_localzone
 
 from app.config import APP_NAME, Settings, is_root
 from app.db import session_scope
@@ -30,6 +28,14 @@ from app.services import backup_archive as archive
 from app.services.config_service import ConfigService
 from app.services.events import EventLog
 from app.services.jobs import JobContext, JobFailed, JobManager
+from app.services.schedules import aware as _aware
+from app.services.schedules import (
+    next_run,
+    next_runs,
+    timezone_name,
+    validate_cron,
+)
+from app.services.schedules import now as _now
 from app.services.world_paths import WorldPaths, container_name, installed_build
 from app.services.world_service import CreateWorldInput, WorldError, WorldService, _chown_tree
 
@@ -40,52 +46,12 @@ KINDS = ("scheduled", "manual", "pre-update", "pre-restore", "pre-image-update",
 # Kinds that max_age_days applies to. Scheduled ones follow retention_count; image ones
 # belong to the image's own BACKUP_MAX_COUNT.
 AGED_KINDS = ("manual", "pre-update", "pre-restore", "pre-image-update", "uploaded")
-MIN_INTERVAL = timedelta(minutes=10)
 DEFAULT_SCHEDULE = {"cron": "0 * * * *", "enabled": True, "skip_if_idle": True,
                     "retention_count": 48, "max_age_days": 0}
 DISK_CACHE_S = 600
 SAVE_WAIT_S = 7 * 60
 SAVE_POLL_S = 2.0
 SAVE_SETTLE_S = 3.0
-
-
-def _now() -> datetime:
-    return datetime.now(UTC)
-
-
-def _aware(dt: datetime) -> datetime:
-    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
-
-
-def cron_trigger(expr: str) -> CronTrigger:
-    """Parse a 5-field cron expression in the controller's time zone (TZ)."""
-    try:
-        return CronTrigger.from_crontab(expr.strip(), timezone=get_localzone())
-    except (ValueError, TypeError) as e:
-        raise WorldError(f"Invalid cron expression {expr!r}: {e}", 422) from e
-
-
-def next_runs(expr: str, after: datetime, count: int = 3) -> list[datetime]:
-    trigger = cron_trigger(expr)
-    out: list[datetime] = []
-    prev = None
-    now = after
-    for _ in range(count):
-        nxt = trigger.get_next_fire_time(prev, now)
-        if nxt is None:
-            break
-        out.append(nxt)
-        prev, now = nxt, nxt + timedelta(seconds=1)
-    return out
-
-
-def validate_cron(expr: str) -> None:
-    runs = next_runs(expr, _now(), 4)
-    if len(runs) < 2:
-        raise WorldError("The schedule never runs (or only once)", 422)
-    gaps = [b - a for a, b in zip(runs, runs[1:], strict=False)]
-    if min(gaps) < MIN_INTERVAL:
-        raise WorldError("Backups can run at most every 10 minutes", 422)
 
 
 def backup_dict(b: Backup, world: WorldPaths) -> dict[str, Any]:
@@ -552,7 +518,7 @@ class BackupService:
             "last_run_at": _aware(row.last_run_at).isoformat() if row.last_run_at else None,
             "next_run_at": nxt.isoformat() if nxt else None,
             "upcoming": [d.isoformat() for d in next_runs(row.cron, _now(), 3)],
-            "timezone": str(get_localzone()),
+            "timezone": timezone_name(),
         }
 
     def update_schedule(self, world: World, changes: dict[str, Any]) -> dict[str, Any]:
@@ -575,9 +541,7 @@ class BackupService:
         return self.schedule(world)
 
     def next_run(self, row: Schedule) -> datetime | None:
-        after = _aware(row.last_run_at) if row.last_run_at else _now()
-        runs = next_runs(row.cron, after + timedelta(seconds=1), 1)
-        return runs[0] if runs else None
+        return next_run(row.cron, row.last_run_at)
 
     def played_since(self, world: World, since: datetime | None) -> bool:
         if since is None:

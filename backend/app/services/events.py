@@ -33,6 +33,7 @@ EVENT_KINDS = {
     "imported",
     "import_rolled_back",
     "import_cleanup",
+    "scheduled_restart",
 }
 
 

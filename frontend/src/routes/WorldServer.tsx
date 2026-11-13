@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import type { ConfigView, ServerFields, WorldDetail, WorldSummary } from "../api/types";
 import { ConfigBanners, UnsavedDialog } from "../components/ConfigBanners";
+import { RestartScheduleCard } from "../components/RestartScheduleCard";
 import { Toggle } from "../components/Toggle";
 import { isRunningState } from "../format";
 import { saveError, useConfig, useConfigSaved, useUnsavedGuard } from "../hooks/config";
@@ -218,6 +219,8 @@ function ServerEditor({ world, schema, config, detail }: { world: WorldSummary; 
             {field("mem_limit_mb", "Memory limit (MB)", { width: 120, placeholder: "none", hint: "Keen recommends 16 GB per server; leave empty for no limit." })}
           </div>
         </div>
+
+        <RestartScheduleCard world={world} />
       </div>
       <UnsavedDialog blocker={blocker} />
     </>

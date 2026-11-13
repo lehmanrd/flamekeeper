@@ -226,7 +226,9 @@ class Monitor:
             if prev == "unknown" or state in ("online", "stopped"):
                 return
         if state == "online":
-            self.events.record(world.id, "online")
+            # "recovered": it was up all along and answers queries again (not a new start).
+            self.events.record(world.id, "online",
+                               **({"recovered": True} if prev == "unresponsive" else {}))
         elif state == "crashed":
             self.events.record(world.id, "crashed", previous=prev)
         elif state == "unresponsive":

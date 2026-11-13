@@ -728,7 +728,8 @@ class WorldService:
 
         return self._submit("stop", world, run, f"Stopping {world.display_name}")
 
-    def restart(self, world: World, mode: str = "process", when: str = "now") -> str:
+    def restart(self, world: World, mode: str = "process", when: str = "now",
+                reason: str | None = None) -> str:
         async def run(ctx: JobContext) -> None:
             name = container_name(world.slug)
             info = await self.docker.get_container(name)
@@ -752,12 +753,14 @@ class WorldService:
                 self._apply_config(ctx, current)
                 await self._start_container(name)
                 self._poke(world.id)
-            self.events.record(world.id, "started", mode=mode)
+            self.events.record(world.id, "started", mode=mode,
+                               **({"reason": reason} if reason else {}))
             self._mark_applied(current)
             await self._wait_online(ctx, world, BOOT_TIMEOUT_S, span=(10, 99), since=since)
             ctx.progress(100, "Online")
 
-        return self._submit("restart", world, run, f"Restarting {world.display_name}")
+        label = "Scheduled restart of" if reason == "scheduled" else "Restarting"
+        return self._submit("restart", world, run, f"{label} {world.display_name}")
 
     def recreate(self, world: World) -> str:
         async def run(ctx: JobContext) -> None:
