@@ -119,8 +119,9 @@ async def run_selfcheck(settings: Settings, docker: DockerAdapter) -> SelfCheckR
     pct_free = usage.free * 100 / usage.total if usage.total else 0
     status = "ok" if usage.free >= MIN_FREE_BYTES and pct_free >= 10 else "warn"
     checks.append(Check("disk", "Disk free", status,
-                        f"{free_gb:.0f} GB free ({pct_free:.0f}%) on {data_dir}. "
-                        "Recommended: 30 GB per world."))
+                        f"{free_gb:.0f} GB free ({pct_free:.0f}%) on the host disk that holds "
+                        f"{data_dir}. Worlds use this disk directly, with no size limit; Keen "
+                        "recommends about 30 GB per server."))
 
     # ntsync (kernel >= 6.14): look at the host's /dev via a helper container.
     try:
