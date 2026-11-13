@@ -1,0 +1,42 @@
+{
+ "AttachStderr": true,
+ "AttachStdin": false,
+ "AttachStdout": true,
+ "Cmd": [
+  "test",
+  "-c",
+  "/dev/ntsync"
+ ],
+ "Domainname": null,
+ "Entrypoint": null,
+ "Env": null,
+ "ExposedPorts": null,
+ "Healthcheck": null,
+ "HostConfig": {
+  "Devices": [
+   {
+    "CgroupPermissions": "rwm",
+    "PathInContainer": "/dev/ntsync",
+    "PathOnHost": "/dev/ntsync"
+   }
+  ],
+  "NetworkMode": "default"
+ },
+ "Hostname": null,
+ "Image": "busybox:stable",
+ "Labels": {
+  "flamekeeper.managed.helper": "true"
+ },
+ "MacAddress": null,
+ "NetworkDisabled": false,
+ "NetworkingConfig": null,
+ "OpenStdin": false,
+ "Runtime": null,
+ "StdinOnce": false,
+ "StopSignal": null,
+ "StopTimeout": null,
+ "Tty": false,
+ "User": null,
+ "Volumes": null,
+ "WorkingDir": null
+}

@@ -27,8 +27,10 @@ FK_REPO="__FK_REPO__"          # set by the release build
 FK_RELEASE="__FK_VERSION__"    # set by the release build
 FK_INSTALL_DIR="${FK_INSTALL_DIR:-/opt/flamekeeper}"
 FK_BIN_DIR="${FK_BIN_DIR:-/usr/local/bin}"
+FK_SYSTEMD_DIR="${FK_SYSTEMD_DIR:-/etc/systemd/system}"
 FK_OS_RELEASE="${FK_OS_RELEASE:-/etc/os-release}"
-MIN_DOCKER="20.10"
+# Volume subpaths (API 1.45), which keep world folders from being swapped for a symlink.
+MIN_DOCKER="26.0"
 GAME_PORTS="15637:15646"
 
 # Filled in by the release build from installer/flamekeeper and compose.template.yml.
@@ -293,7 +295,8 @@ ensure_docker() {
 
   local version
   version="$(docker_cmd version --format '{{.Server.Version}}' 2>/dev/null || echo 0)"
-  version_ge "$version" "$MIN_DOCKER" || die "Docker $version is too old; FlameKeeper needs $MIN_DOCKER or newer."
+  version_ge "$version" "$MIN_DOCKER" ||
+    die "Docker $version is too old: FlameKeeper needs Docker Engine $MIN_DOCKER or newer (March 2024) to mount world folders safely. Upgrade it (https://docs.docker.com/engine/install/; distribution packages such as Debian's docker.io can lag behind), then re-run."
   ok "Docker $version"
 
   if ! docker_cmd compose version >/dev/null 2>&1; then
@@ -381,6 +384,7 @@ FK_BIND=""
 FK_DATA_DIR=""
 FK_TZ=""
 FK_BASE_PATH=""
+FK_PROXY_MODE=""
 resolve_settings() {
   local env_file="$FK_INSTALL_DIR/.env" version
   version="${OPT_VERSION:-}"
@@ -399,6 +403,9 @@ resolve_settings() {
   FK_TZ="$(env_get "$env_file" TZ)"
   FK_TZ="${FK_TZ:-$(detect_tz)}"
   FK_BASE_PATH="$(env_get "$env_file" BASE_PATH)"
+  # enforce, or audit (logs what it would refuse) as an escape hatch: docs/socket-proxy.md.
+  FK_PROXY_MODE="$(env_get "$env_file" FK_PROXY_MODE)"
+  [[ "$FK_PROXY_MODE" == audit ]] || FK_PROXY_MODE=enforce
 }
 
 render_env() {
@@ -411,6 +418,7 @@ DATA_DIR=$FK_DATA_DIR
 TZ=$FK_TZ
 BASE_PATH=$FK_BASE_PATH
 DOCKER_SOCK=$DOCKER_SOCK
+FK_PROXY_MODE=$FK_PROXY_MODE
 EOF
 }
 
@@ -437,11 +445,12 @@ write_files() {
   tmp="$(mktemp -d)"
   render_env >"$tmp/.env"
   embedded_or_file "$EMBEDDED_COMPOSE" compose.template.yml |
-    sed -e "s#__FK_CLI__#$FK_BIN_DIR/flamekeeper#g" >"$tmp/docker-compose.yml"
+    sed -e "s#__FK_CLI__#$FK_BIN_DIR/flamekeeper#g" \
+      -e "s#__FK_INSTALL_DIR__#$FK_INSTALL_DIR#g" >"$tmp/docker-compose.yml"
   embedded_or_file "$EMBEDDED_CLI" flamekeeper |
     sed -e "s#__FK_REPO__#$FK_REPO#g" -e "s#__FK_INSTALL_DIR__#$FK_INSTALL_DIR#g" >"$tmp/flamekeeper"
 
-  as_root mkdir -p "$FK_INSTALL_DIR" "$FK_DATA_DIR"
+  as_root mkdir -p "$FK_INSTALL_DIR" "$FK_DATA_DIR" "$FK_INSTALL_DIR/self-update" "$FK_INSTALL_DIR/proxy"
   as_root install -m 0644 "$tmp/.env" "$FK_INSTALL_DIR/.env"
   as_root install -m 0644 "$tmp/docker-compose.yml" "$FK_INSTALL_DIR/docker-compose.yml"
   as_root install -m 0755 "$tmp/flamekeeper" "$FK_BIN_DIR/flamekeeper"
@@ -449,6 +458,60 @@ write_files() {
   ok "$FK_INSTALL_DIR/docker-compose.yml and .env"
   ok "$FK_BIN_DIR/flamekeeper command"
   ok "Data folder $FK_DATA_DIR"
+}
+
+# --- updates from the web UI -------------------------------------------------------------
+
+# The controller can't update itself without root on the host. It writes
+# DATA_DIR/self-update/request; flamekeeper-update.path notices and runs
+# `flamekeeper update-request` as root, which checks the request and runs
+# `flamekeeper update`. The result goes to $FK_INSTALL_DIR/self-update, which the
+# controller only sees read-only. Without systemd, updates are run by hand.
+render_update_path() {
+  cat <<EOF
+[Unit]
+Description=FlameKeeper: watch for updates requested in the web UI
+
+[Path]
+PathExists=$FK_DATA_DIR/self-update/request
+Unit=flamekeeper-update.service
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+render_update_service() {
+  cat <<EOF
+[Unit]
+Description=FlameKeeper: update requested in the web UI
+
+[Service]
+Type=oneshot
+ExecStart=$FK_BIN_DIR/flamekeeper update-request
+TimeoutStartSec=30min
+EOF
+}
+
+install_updater() {
+  local marker="$FK_INSTALL_DIR/self-update/updater" tmp
+  if ! has_systemd; then
+    as_root rm -f "$marker"
+    info "No systemd: update FlameKeeper with 'sudo flamekeeper update' (the web UI can't)."
+    return 0
+  fi
+  tmp="$(mktemp -d)"
+  render_update_path >"$tmp/flamekeeper-update.path"
+  render_update_service >"$tmp/flamekeeper-update.service"
+  as_root mkdir -p "$FK_SYSTEMD_DIR" "$FK_DATA_DIR/self-update"
+  as_root install -m 0644 "$tmp/flamekeeper-update.path" "$tmp/flamekeeper-update.service" "$FK_SYSTEMD_DIR/"
+  rm -rf "$tmp"
+  as_root systemctl daemon-reload
+  as_root systemctl enable --now flamekeeper-update.path >/dev/null 2>&1 ||
+    die "Couldn't start flamekeeper-update.path (see: systemctl status flamekeeper-update.path)"
+  echo systemd | as_root tee "$marker" >/dev/null
+  as_root chmod 0644 "$marker"
+  ok "Updates from the web UI (flamekeeper-update.path)"
 }
 
 # --- firewall ---------------------------------------------------------------------------
@@ -600,6 +663,7 @@ main() {
   resolve_settings
   check_resources "$FK_DATA_DIR"
   write_files
+  install_updater
   configure_firewall
   start_controller
   create_admin

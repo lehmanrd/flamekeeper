@@ -30,6 +30,7 @@ import logging
 import posixpath
 import re
 import secrets
+import shlex
 import shutil
 import tarfile
 import tempfile
@@ -75,7 +76,11 @@ KNOWN_INSTALL_DIRS = ("/opt/enshrouded/server", "/home/steam/enshrouded",
                       "/enshrouded", "/server", "/data")
 GAME_PORTS = ("15636/udp", "15637/udp")
 DEFAULT_QUERY_PORT = 15637
+# The host folder the user chose is mounted read-only at HOST_ROOT + its own path, and
+# everything is read inside it; never the host's / (docs/socket-proxy.md).
 HOST_ROOT = "/host"
+# Run on the host to let the importer touch a folder or container (docs/socket-proxy.md).
+GRANT_COMMAND = "sudo flamekeeper import --allow"
 STALE_AFTER = timedelta(hours=24)
 STOP_TIMEOUT_S = 120
 MAX_CONFIG_BYTES = 1024**2
@@ -85,18 +90,29 @@ GAME_EXE = "enshrouded_server.exe"
 # Copied with the save and config, or the server's own output: not game files.
 NOT_GAME_FILES = frozenset({"savegame", "logs", "backups", "crash_dumps", CONFIG_NAME})
 GAME_COPY_TIMEOUT_S = 2 * 60 * 60
-# Game files from a host folder; $1 = install folder, $2 = save folder name to skip.
+# Game files from a host folder; $1 = install folder, $2 = save folder name to skip,
+# $3 = where to copy them.
 GAME_COPY_SCRIPT = ('cd "$1" || exit 1; for f in * .[!.]*; do '
                     '{ [ -e "$f" ] || [ -L "$f" ]; } || continue; '
                     'case "$f" in savegame|logs|backups|crash_dumps|enshrouded_server.json) '
                     'continue;; esac; [ "$f" = "$2" ] && continue; '
-                    'cp -a "$f" /out/ || exit 1; done')
-COPY_SCRIPT = ('set -e; mkdir -p /out/savegame; cp -R "$1"/. /out/savegame/; '
-               'if [ -n "$2" ]; then cp "$2" /out/enshrouded_server.json; fi')
+                    'cp -a "$f" "$3/" || exit 1; done')
+# Save folder $1 and config $2 into $3.
+COPY_SCRIPT = ('set -e; mkdir -p "$3/savegame"; cp -R "$1"/. "$3/savegame/"; '
+               'if [ -n "$2" ]; then cp "$2" "$3/enshrouded_server.json"; fi')
+# Helpers see DATA_DIR here. Only DATA_DIR itself is ever bound into a helper, never a
+# folder in it: FlameKeeper could swap that folder for a symlink before Docker mounts it
+# (docs/socket-proxy.md).
+DATA_MOUNT = "/data"
 
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _host_mount(path: str) -> dict[str, str]:
+    """A host folder, read-only at HOST_ROOT + path in a helper."""
+    return {path: HOST_ROOT + path}
 
 
 def _find_cmd(roots: list[str]) -> list[str]:
@@ -311,12 +327,45 @@ class ImportService:
         token, folder = self._new_token()
         return token, folder / "upload.zip"
 
+    def _in_helper(self, path: Path) -> str:
+        """Where a path in DATA_DIR is inside a helper (DATA_DIR at DATA_MOUNT)."""
+        return f"{DATA_MOUNT}/{path.relative_to(self.settings.data_dir).as_posix()}"
+
+    async def _require_grant(self, *, container: ContainerInfo | None = None,
+                             path: str | None = None, name: str | None = None) -> None:
+        """The docker proxy lets the importer touch a container FlameKeeper didn't create,
+        or a host folder, only when the host admin allows it. Check first, so the user
+        gets the command to run instead of an import that fails halfway. `name` alone:
+        any grant will do (removing the old container's volumes)."""
+        try:
+            grant = await self.docker.import_grant()
+        except DockerError:
+            grant = None
+        if grant is None:  # Docker directly: nothing to allow
+            return
+        allowed = bool(grant.get("active"))
+        if container is not None:
+            arg, what = container.name, f"the container {container.name}"
+            allowed = allowed and any(
+                g and (g.lstrip("/") == container.name or container.id.startswith(g))
+                for g in grant.get("containers") or [])
+        elif path is not None:
+            arg, what = shlex.quote(path), path
+            allowed = allowed and path in (grant.get("paths") or [])
+        else:
+            arg, what = name or "CONTAINER", f"what's left of {name}"
+        if not allowed:
+            raise WorldError(
+                f"FlameKeeper needs your OK on the server to touch {what}. Run this there, "
+                f"then try again (it's allowed for an hour): {GRANT_COMMAND} {arg}", 403)
+
     async def scan_container(self, name_or_id: str) -> dict[str, Any]:
         c = await self.docker.get_container(name_or_id)
         if c is None:
             raise WorldError(f"Container {name_or_id!r} not found", 404)
         if c.labels.get(LABEL_MANAGED):
             raise WorldError("FlameKeeper already manages this container", 409)
+        await self._require_grant(container=c)
         token, folder = self._new_token()
         try:
             source = {"kind": "container", "container_id": c.id, "container_name": c.name,
@@ -338,6 +387,7 @@ class ImportService:
         path = posixpath.normpath(path)
         if path == "/":
             raise WorldError("Choose the server's folder, not /", 422)
+        await self._require_grant(path=path)
         token, folder = self._new_token()
         try:
             source = {"kind": "host_path", "host_path": path, "label": path}
@@ -345,7 +395,7 @@ class ImportService:
             scan = await self._finish_scan(token, folder, source, *found)
             scan.update({"port": await self._free_port(scan["summary"]["query_port"]),
                          "reusable_port": None, "running": False, "players_online": None})
-            scan["game_files"] = await self._game_files_on_host(scan)
+            scan["game_files"] = await self._game_files_on_host(scan, path)
         except BaseException:
             shutil.rmtree(folder, ignore_errors=True)
             raise
@@ -396,19 +446,22 @@ class ImportService:
                     if acf else None}
         return None
 
-    async def _game_files_on_host(self, scan: dict[str, Any]) -> dict[str, Any] | None:
-        binds = {"/": f"{HOST_ROOT}:ro"}
+    async def _game_files_on_host(self, scan: dict[str, Any], root: str) -> dict[str, Any] | None:
+        """Only inside the folder the user chose: that is the one folder mounted."""
+        mounts = _host_mount(root)
         for d in self._install_candidates(scan, known=False):
+            if d != root and not d.startswith(root + "/"):
+                continue
             try:
                 res = await self.docker.run_helper(
                     self.settings.helper_image, ["test", "-f", f"{HOST_ROOT}{d}/{GAME_EXE}"],
-                    binds=binds)
+                    ro_mounts=mounts)
                 if res.exit_code != 0:
                     continue
                 acf = await self.docker.run_helper(
                     self.settings.helper_image,
                     ["cat", f"{HOST_ROOT}{d}/steamapps/appmanifest_{STEAM_APP_ID}.acf"],
-                    binds=binds)
+                    ro_mounts=mounts)
             except DockerError:
                 continue
             build = parse_buildid(acf.output) if acf.exit_code == 0 else None
@@ -424,7 +477,7 @@ class ImportService:
         if roots:
             try:
                 res = await self.docker.run_helper(self.settings.helper_image, _find_cmd(roots),
-                                                   volumes_from=[c.id])
+                                                   volumes_from=[f"{c.id}:ro"])
             except DockerError as e:
                 raise WorldError(f"Could not search the container's volumes: {e}", 502) from e
             configs, folders = _parse_find(res.output)
@@ -494,10 +547,13 @@ class ImportService:
     async def _locate_on_host(self, path: str
                               ) -> tuple[str | None, str | None, list[str], bytes | None]:
         root = HOST_ROOT + path
+        mounts = _host_mount(path)
         try:
             res = await self.docker.run_helper(self.settings.helper_image, _find_cmd([root]),
-                                               binds={"/": f"{HOST_ROOT}:ro"})
+                                               ro_mounts=mounts)
         except DockerError as e:
+            if "does not exist" in str(e):
+                raise WorldError(f"{path} doesn't exist on the host", 422) from e
             raise WorldError(f"Could not search {path}: {e}", 502) from e
         configs, folders = _parse_find(res.output)
         docs: dict[str, dict[str, Any]] = {}
@@ -505,8 +561,7 @@ class ImportService:
         for config in configs[:5]:
             try:
                 out = await self.docker.run_helper(self.settings.helper_image,
-                                                   ["cat", config],
-                                                   binds={"/": f"{HOST_ROOT}:ro"})
+                                                   ["cat", config], ro_mounts=mounts)
                 doc = json.loads(out.output)
             except (DockerError, json.JSONDecodeError):
                 continue
@@ -625,8 +680,9 @@ class ImportService:
                 res = await self.docker.run_helper(
                     self.settings.helper_image,
                     ["sh", "-c", COPY_SCRIPT, "sh", HOST_ROOT + save,
-                     HOST_ROOT + config if config else ""],
-                    binds={"/": f"{HOST_ROOT}:ro", str(stage): "/out"})
+                     HOST_ROOT + config if config else "", self._in_helper(stage)],
+                    binds={str(self.settings.data_dir): DATA_MOUNT},
+                    ro_mounts=_host_mount(source["host_path"]))
                 if res.exit_code != 0:
                     raise WorldError(f"Could not copy the savegame: {res.output.strip()}", 502)
                 cfg = stage / CONFIG_NAME
@@ -695,8 +751,11 @@ class ImportService:
         save = body.get("save_path") or scan["save_path"]
         if save != scan["save_path"] and save not in scan["save_options"]:
             raise WorldError("Choose one of the save folders the scan found", 422)
+        if scan["source"]["kind"] == "host_path":
+            await self._require_grant(path=scan["source"]["host_path"])
         if scan["source"]["kind"] == "container":
             c = await self._container(scan["source"])
+            await self._require_grant(container=c)
             if c.running and c.auto_remove:
                 raise WorldError(f"{c.name} was started with --rm, so stopping it would delete "
                                  "it. Stop it yourself, then scan it again.", 409)
@@ -793,8 +852,10 @@ class ImportService:
                 return
             res = await self.docker.run_helper(
                 self.settings.helper_image,
-                ["sh", "-c", GAME_COPY_SCRIPT, "sh", HOST_ROOT + install, save_name],
-                binds={"/": f"{HOST_ROOT}:ro", str(dest): "/out"},
+                ["sh", "-c", GAME_COPY_SCRIPT, "sh", HOST_ROOT + install, save_name,
+                 self._in_helper(dest)],
+                binds={str(self.settings.data_dir): DATA_MOUNT},
+                ro_mounts=_host_mount(source["host_path"]),
                 timeout=GAME_COPY_TIMEOUT_S)
             if res.exit_code != 0:
                 raise JobFailed(f"Could not copy the game files: {res.output.strip()}")
@@ -940,6 +1001,7 @@ class ImportService:
         if c is not None:
             if c.running:
                 raise WorldError(f"{c.name} is running again; stop it first", 409)
+            await self._require_grant(container=c)
             await self.docker.remove(c.id)
         self._set(world.id, state="container_removed")
         self.events.record(world.id, "import_cleanup", container=row.source_label)
@@ -951,6 +1013,7 @@ class ImportService:
             raise WorldError("This world wasn't imported from a container", 404)
         if row.state != "container_removed":
             raise WorldError("Remove the old container first", 409)
+        await self._require_grant(name=row.source_label)
         removed, kept = [], []
         for name in row.volumes:
             users = await self.docker.volume_users(name)
