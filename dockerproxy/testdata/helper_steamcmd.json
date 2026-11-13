@@ -1,0 +1,34 @@
+{
+ "AttachStderr": false,
+ "AttachStdin": false,
+ "AttachStdout": false,
+ "Cmd": [
+  "+login",
+  "anonymous"
+ ],
+ "Domainname": null,
+ "Entrypoint": null,
+ "Env": null,
+ "ExposedPorts": null,
+ "Healthcheck": null,
+ "HostConfig": {
+  "NetworkMode": "default"
+ },
+ "Hostname": null,
+ "Image": "steamcmd/steamcmd:latest",
+ "Labels": {
+  "flamekeeper.managed.helper": "true"
+ },
+ "MacAddress": null,
+ "NetworkDisabled": false,
+ "NetworkingConfig": null,
+ "OpenStdin": false,
+ "Runtime": null,
+ "StdinOnce": false,
+ "StopSignal": null,
+ "StopTimeout": null,
+ "Tty": false,
+ "User": null,
+ "Volumes": null,
+ "WorkingDir": null
+}

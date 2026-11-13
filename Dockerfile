@@ -8,6 +8,12 @@ RUN npm ci --no-audit --no-fund
 COPY frontend/ ./
 RUN npm run build
 
+# --- Docker socket proxy (docs/socket-proxy.md) -------------------------------
+FROM golang:1.23-alpine AS proxy
+WORKDIR /src
+COPY dockerproxy/ ./
+RUN CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="-s -w" -o /fk-dockerproxy .
+
 # --- Controller -----------------------------------------------------------------
 FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -21,6 +27,9 @@ COPY backend/pyproject.toml backend/uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 COPY backend/ ./
 COPY --from=ui /ui/dist ./app/static
+COPY --from=proxy /fk-dockerproxy /usr/local/bin/fk-dockerproxy
+# Where the proxy's socket lives; a named volume mounted here copies this ownership.
+RUN mkdir -p /run/fk && chown 65534:65534 /run/fk
 
 ARG VERSION=dev
 ARG REPO=lehmanrd/flamekeeper
