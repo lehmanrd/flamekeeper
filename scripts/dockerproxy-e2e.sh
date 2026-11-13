@@ -6,8 +6,8 @@
 #   scripts/dockerproxy-e2e.sh logs          # what the proxy denied / would deny
 #   scripts/dockerproxy-e2e.sh down          # removes both containers and the socket volume
 #
-# DATA_DIR must be reachable by the proxy's unprivileged user (it runs with the docker
-# group and the owning group of DATA_DIR's parent added).
+# Import grants go in DATA_DIR-proxy-state/import.json (mounted read-only into the
+# proxy only).
 set -euo pipefail
 
 PROXY=fk-e2e-dockerproxy
@@ -17,16 +17,15 @@ VOL=fk-e2e-sock
 case "${1:-}" in
   up)
     image=${2:?image}; data=${3:?data dir}; mode=${4:-audit}; port=${5:-18080}
-    mkdir -p "$data"
+    mkdir -p "$data" "$data-proxy-state"
     docker volume create "$VOL" >/dev/null
     docker run -d --name "$PROXY" --restart unless-stopped \
-      --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
-      --user 65534:65534 \
-      --group-add "$(stat -c %g /var/run/docker.sock)" \
-      --group-add "$(stat -c %g "$(dirname "$data")")" \
+      --network none --read-only --security-opt no-new-privileges \
+      --cap-drop ALL --cap-add DAC_READ_SEARCH \
       -v /var/run/docker.sock:/var/run/docker.sock \
       -v "$VOL":/run/fk \
       -v "$data":"$data":ro \
+      -v "$data-proxy-state":/var/lib/fk-dockerproxy:ro \
       -e DATA_DIR="$data" -e FK_PROXY_MODE="$mode" -e FK_PROXY_LOG_ALLOWED=1 \
       "$image" fk-dockerproxy >/dev/null
     for _ in $(seq 20); do

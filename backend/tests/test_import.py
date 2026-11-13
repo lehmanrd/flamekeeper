@@ -54,6 +54,19 @@ def _mornedhels(tmp: Path, fake: FakeDockerAdapter, *, running: bool = True,
     return save
 
 
+def _assert_narrow_helpers(fake: FakeDockerAdapter, settings: Settings,
+                           allowed: list[Path]) -> None:
+    """Helpers never see the host's / or /dev: writable binds stay in DATA_DIR, and host
+    folders are read-only mounts inside `allowed` (docs/socket-proxy.md)."""
+    assert fake.helper_runs
+    for run in fake.helper_runs:
+        for host in run["binds"]:
+            assert Path(host).is_relative_to(settings.data_dir), run
+        for host in run["ro_mounts"]:
+            assert any(Path(host).is_relative_to(a) for a in allowed), run
+        assert all(v.endswith(":ro") for v in run["volumes_from"]), run
+
+
 def _new_save(settings: Settings, slug: str) -> Path:
     return settings.worlds_dir / slug / "game" / "server" / "savegame"
 
@@ -242,6 +255,9 @@ def test_volume_save_with_config_in_the_container_layer(
         layer={"/home/steam/enshrouded": install},
         ports={"15637/udp": [24000]}, running=False)
     scan = _scan(client, kind="container", container="sknnr")
+    # The volumes were searched through a read-only volumes_from, nothing else.
+    _assert_narrow_helpers(fake_docker, settings, [])
+    assert any(r["volumes_from"] for r in fake_docker.helper_runs)
     assert scan["config_path"] == "/home/steam/enshrouded/enshrouded_server.json"
     assert scan["save_path"] == "/home/steam/enshrouded/savegame"
     assert scan["summary"]["save_format"] == "pre-1.0"
@@ -272,6 +288,18 @@ def test_import_from_host_folder(
     assert _live_config(settings, world["slug"])["userGroups"][0]["password"] == "AdminPw1"
     # The folder was only read.
     assert (server / "savegame" / "world0.ksd").exists()
+    _assert_narrow_helpers(fake_docker, settings, [tmp_path / "native"])
+
+
+def test_host_folder_that_does_not_exist(
+    client: TestClient, fake_docker: FakeDockerAdapter, tmp_path: Path
+) -> None:
+    res = client.post("/api/imports/scan", json={"kind": "host_path",
+                                                 "path": str(tmp_path / "nope")})
+    assert res.status_code == 422 and "doesn't exist on the host" in res.json()["detail"]
+    # Read-only mounts, which Docker never creates on the host (binds would be).
+    assert fake_docker.helper_runs[-1]["ro_mounts"] == {str(tmp_path / "nope"):
+                                                        f"/host{tmp_path / 'nope'}"}
 
 
 def test_host_folder_without_saves(client: TestClient, tmp_path: Path) -> None:
@@ -422,7 +450,7 @@ def test_copies_game_files_from_the_container_layer(
 
 
 def test_copies_game_files_from_a_host_folder(
-    client: TestClient, settings: Settings, tmp_path: Path
+    client: TestClient, fake_docker: FakeDockerAdapter, settings: Settings, tmp_path: Path
 ) -> None:
     server = tmp_path / "native"
     (server / "savegame").mkdir(parents=True)
@@ -437,6 +465,7 @@ def test_copies_game_files_from_a_host_folder(
     assert (new / "steamapps" / "compatdata" / "2278520" / "pfx" / "dosdevices" / "z:").is_symlink()
     assert not (new / "logs" / "enshrouded_server.log").exists()
     assert (new / "savegame" / "world0.ksd").read_bytes() == b"native"
+    _assert_narrow_helpers(fake_docker, settings, [server])
 
 
 def test_no_game_files_found(client: TestClient, fake_docker: FakeDockerAdapter,

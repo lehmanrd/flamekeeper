@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -20,11 +19,11 @@ type fakeInspector struct {
 	networks   map[string]string
 }
 
-func (f fakeInspector) ContainerLabels(_ context.Context, id string) (map[string]string, error) {
-	if l, ok := f.containers[id]; ok {
-		return l, nil
+func (f fakeInspector) Container(_ context.Context, ref string) (containerInfo, error) {
+	if l, ok := f.containers[ref]; ok {
+		return containerInfo{ID: "id-" + ref, Name: ref, Labels: l}, nil
 	}
-	return nil, errNotFound
+	return containerInfo{}, errNotFound
 }
 
 func (f fakeInspector) NetworkName(_ context.Context, id string) (string, error) {
@@ -57,18 +56,24 @@ func newTestPolicy(t *testing.T) (*Policy, string) {
 			"helper1":               {labelHelper: "true"},
 			"controller":            {labelRole: "controller"},
 			"old-server":            {"com.docker.compose.project": "enshrouded"},
+			"other-server":          {},
 		},
 		networks: map[string]string{"net1": "flamekeeper", "net2": "bridge"},
 	}
 	return NewPolicy(cfg, insp), data
 }
 
-func openImport(t *testing.T, p *Policy) {
+func writeGrant(t *testing.T, p *Policy, until time.Time, paths, containers []string) {
 	t.Helper()
-	until := fmt.Sprint(time.Now().Add(time.Hour).Unix())
-	if err := os.WriteFile(filepath.Join(p.cfg.StateDir, "import-until"), []byte(until), 0o644); err != nil {
+	b, _ := json.Marshal(importGrant{Until: until.Unix(), Paths: paths, Containers: containers})
+	if err := os.WriteFile(filepath.Join(p.cfg.StateDir, "import.json"), b, 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// grantImport: the admin allowed importing old-server and /srv/old-server for an hour.
+func grantImport(t *testing.T, p *Policy) {
+	writeGrant(t, p, time.Now().Add(time.Hour), []string{"/srv/old-server"}, []string{"old-server"})
 }
 
 func fixture(t *testing.T, name, data string) []byte {
@@ -202,11 +207,16 @@ func TestCreateHelper(t *testing.T) {
 	expect(t, create(fixture(t, "helper_ports", data)), true, "")
 	expect(t, create(fixture(t, "helper_data", data)), true, "")
 	expect(t, create(fixture(t, "helper_steamcmd", data)), true, "")
+	expect(t, create(fixture(t, "helper_ntsync", data)), true, "")
 
-	// today's code paths that step 2 replaces
+	// the shapes step 2 removed stay refused
 	expect(t, create(fixture(t, "helper_dev", data)), false, "outside")
-	expect(t, create(fixture(t, "helper_hostroot", data)), false, "import window")
+	expect(t, create(fixture(t, "helper_hostroot", data)), false, "outside")
 	expect(t, create(fixture(t, "helper_volumes_from", data)), false, ":ro")
+
+	// import helpers need a grant
+	expect(t, create(fixture(t, "helper_hostmount", data)), false, "import grant")
+	expect(t, create(fixture(t, "helper_volumes_from_ro", data)), false, "import grant")
 
 	ports := fixture(t, "helper_ports", data)
 	expect(t, create(edit(t, ports, func(m map[string]any) { m["Cmd"] = []string{"sh", "-c", "nc 127.0.0.1 22"} })),
@@ -219,17 +229,69 @@ func TestCreateHelper(t *testing.T) {
 	expect(t, create(edit(t, fixture(t, "helper_data", data), func(m map[string]any) {
 		hostConfig(m)["Privileged"] = true
 	})), false, "Privileged")
+	expect(t, create(edit(t, fixture(t, "helper_ntsync", data), func(m map[string]any) {
+		hostConfig(m)["Devices"] = []any{map[string]any{"PathOnHost": "/dev/sda", "PathInContainer": "/dev/sda"}}
+	})), false, "device")
 
-	t.Run("import window", func(t *testing.T) {
-		openImport(t, p)
-		expect(t, create(fixture(t, "helper_hostroot", data)), true, "")
-		vf := edit(t, fixture(t, "helper_volumes_from", data), func(m map[string]any) {
-			hostConfig(m)["VolumesFrom"] = []string{"abc123:ro"}
-		})
-		expect(t, create(vf), true, "")
-		// still read-only only
+	t.Run("with a grant", func(t *testing.T) {
+		grantImport(t, p)
+		for _, f := range []string{"helper_hostmount", "helper_volumes_from_ro"} {
+			d := create(fixture(t, f, data))
+			expect(t, d, true, "")
+			if d.Rule != "import-create-helper" {
+				t.Fatalf("%s: rule %q, want import-create-helper", f, d.Rule)
+			}
+		}
+		// still not: other containers, writable volumes_from, other folders
+		vf := fixture(t, "helper_volumes_from_ro", data)
+		expect(t, create(edit(t, vf, func(m map[string]any) {
+			hostConfig(m)["VolumesFrom"] = []string{"flamekeeper-embervale:ro"}
+		})), false, "import grant")
+		expect(t, create(fixture(t, "helper_volumes_from", data)), false, ":ro")
 		expect(t, create(fixture(t, "helper_dev", data)), false, "outside")
+		expect(t, create(fixture(t, "helper_hostroot", data)), false, "outside")
 	})
+}
+
+func TestHelperMounts(t *testing.T) {
+	p, data := newTestPolicy(t)
+	writeGrant(t, p, time.Now().Add(time.Hour),
+		[]string{"/srv/old-server", "/", "/var", "/run/user/1000/srv"}, []string{"old-server"})
+	body := fixture(t, "helper_hostmount", data)
+	mount := func(f func(mt map[string]any)) Decision {
+		return decide(p, "POST", "/containers/create", "", edit(t, body, func(m map[string]any) {
+			mt := hostConfig(m)["Mounts"].([]any)[0].(map[string]any)
+			f(mt)
+		}))
+	}
+	src := func(s string) func(map[string]any) { return func(mt map[string]any) { mt["Source"] = s } }
+
+	expect(t, mount(func(map[string]any) {}), true, "")
+	expect(t, mount(src(data+"/imports/abc")), true, "") // DATA_DIR needs no grant
+	// granted, but these hold sockets or contain folders that do
+	for _, s := range []string{"/", "/var", "/run/user/1000/srv"} {
+		expect(t, mount(src(s)), false, "never mounted")
+	}
+	// only the granted folder itself: a subfolder could be a symlink on the host
+	expect(t, mount(src("/srv/old-server/link")), false, "import grant")
+	expect(t, mount(src("/srv/old-server/../../run")), false, "clean")
+	expect(t, mount(func(mt map[string]any) { mt["ReadOnly"] = false }), false, "read-only")
+	expect(t, mount(func(mt map[string]any) { mt["Type"] = "volume" }), false, "read-only")
+	expect(t, mount(func(mt map[string]any) {
+		mt["BindOptions"] = map[string]any{"CreateMountpoint": true}
+	}), false, "CreateMountpoint")
+	expect(t, mount(func(mt map[string]any) {
+		mt["BindOptions"] = map[string]any{"Propagation": "rshared"}
+	}), false, "propagation")
+	expect(t, mount(func(mt map[string]any) {
+		mt["VolumeOptions"] = map[string]any{"DriverConfig": map[string]any{"Name": "local"}}
+	}), false, "VolumeOptions")
+
+	// a symlink in DATA_DIR doesn't get through either
+	if err := os.Symlink("/run", filepath.Join(data, "evil")); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, mount(src(data+"/evil")), false, "")
 }
 
 func TestCreateOther(t *testing.T) {
@@ -248,8 +310,8 @@ func TestContainerOps(t *testing.T) {
 		expect(t, decide(p, "GET", "/containers/"+id+"/logs", "follow=1", nil), true, "")
 		expect(t, decide(p, "HEAD", "/containers/"+id+"/archive", "path=/x", nil), true, "")
 	}
-	expect(t, decide(p, "POST", "/containers/old-server/stop", "", nil), false, "import window")
-	expect(t, decide(p, "GET", "/containers/old-server/archive", "path=/x", nil), false, "import window")
+	expect(t, decide(p, "POST", "/containers/old-server/stop", "", nil), false, "import grant")
+	expect(t, decide(p, "GET", "/containers/old-server/archive", "path=/x", nil), false, "import grant")
 	expect(t, decide(p, "GET", "/containers/old-server/json", "", nil), true, "")
 	expect(t, decide(p, "GET", "/containers/json", "all=1", nil), true, "")
 	expect(t, decide(p, "PUT", "/containers/flamekeeper-embervale/archive", "path=/", nil), false, "")
@@ -258,24 +320,28 @@ func TestContainerOps(t *testing.T) {
 
 	update := []byte(`{"RestartPolicy":{"Name":"no"}}`)
 	expect(t, decide(p, "POST", "/containers/flamekeeper-embervale/update", "", update), true, "")
-	expect(t, decide(p, "POST", "/containers/old-server/update", "", update), false, "import window")
+	expect(t, decide(p, "POST", "/containers/old-server/update", "", update), false, "import grant")
 	expect(t, decide(p, "POST", "/containers/flamekeeper-embervale/update", "",
 		[]byte(`{"RestartPolicy":{"Name":"no"},"Devices":[{"PathOnHost":"/dev/sda"}]}`)), false, "Devices")
 
-	openImport(t, p)
+	grantImport(t, p)
 	expect(t, decide(p, "POST", "/containers/old-server/stop", "", nil), true, "")
+	expect(t, decide(p, "POST", "/containers/id-old-server/stop", "", nil), true, "") // by ID
 	expect(t, decide(p, "POST", "/containers/old-server/update", "", update), true, "")
 	expect(t, decide(p, "DELETE", "/volumes/old-data", "", nil), true, "")
+	// the grant names one container, not all of them
+	expect(t, decide(p, "POST", "/containers/other-server/stop", "", nil), false, "import grant")
 }
 
-func TestImportWindowExpires(t *testing.T) {
+func TestImportGrantExpires(t *testing.T) {
 	p, _ := newTestPolicy(t)
-	past := fmt.Sprint(time.Now().Add(-time.Minute).Unix())
-	if err := os.WriteFile(filepath.Join(p.cfg.StateDir, "import-until"), []byte(past), 0o644); err != nil {
+	writeGrant(t, p, time.Now().Add(-time.Minute), []string{"/srv/old-server"}, []string{"old-server"})
+	expect(t, decide(p, "POST", "/containers/old-server/stop", "", nil), false, "import grant")
+	expect(t, decide(p, "DELETE", "/volumes/old-data", "", nil), false, "import grant")
+	if err := os.WriteFile(filepath.Join(p.cfg.StateDir, "import.json"), []byte("garbage"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	expect(t, decide(p, "POST", "/containers/old-server/stop", "", nil), false, "import window")
-	expect(t, decide(p, "DELETE", "/volumes/old-data", "", nil), false, "import window")
+	expect(t, decide(p, "POST", "/containers/old-server/stop", "", nil), false, "import grant")
 }
 
 func TestExec(t *testing.T) {

@@ -29,9 +29,15 @@ var hostPortsCmd = []string{"cat", "/proc/net/udp", "/proc/net/udp6"}
 
 var errNotFound = errors.New("not found")
 
+type containerInfo struct {
+	ID     string
+	Name   string // without the leading /
+	Labels map[string]string
+}
+
 // Inspector looks things up on the real Docker daemon.
 type Inspector interface {
-	ContainerLabels(ctx context.Context, id string) (map[string]string, error)
+	Container(ctx context.Context, ref string) (containerInfo, error)
 	NetworkName(ctx context.Context, id string) (string, error)
 }
 
@@ -100,10 +106,10 @@ func (p *Policy) Decide(ctx context.Context, method, path string, q url.Values, 
 			return allow("read")
 		}
 		if method == "DELETE" && n == 2 {
-			if p.importOpen() {
-				return allow("import")
+			if p.grant() != nil {
+				return allow("import-volume-remove")
 			}
-			return deny("volume-remove", "removing volumes is only allowed while the import window is open")
+			return deny("volume-remove", "removing volumes is only allowed during an import grant")
 		}
 	case "exec":
 		if read && n == 3 && seg[2] == "json" {
@@ -123,7 +129,7 @@ func (p *Policy) containers(ctx context.Context, method string, seg []string, bo
 	case n == 2 && seg[1] == "json" && read:
 		return allow("read")
 	case n == 2 && seg[1] == "create" && method == "POST":
-		return p.create(body)
+		return p.create(ctx, body)
 	case n == 3 && seg[2] == "json" && read:
 		return allow("read")
 	case n == 2 && method == "DELETE":
@@ -151,35 +157,23 @@ func isWorld(l map[string]string) bool {
 	return l[labelManaged] == "true" && l[labelWorldID] != "" && l[labelHelper] != "true"
 }
 
-// target allows an operation on an existing container FlameKeeper made, or on any
-// container while the import window is open.
+// target allows an operation on an existing container FlameKeeper made, or on a
+// container the current import grant names.
 func (p *Policy) target(ctx context.Context, id, rule string) Decision {
-	labels, err := p.insp.ContainerLabels(ctx, id)
+	c, err := p.insp.Container(ctx, id)
 	if errors.Is(err, errNotFound) {
 		return allow(rule) // Docker answers 404 itself
 	}
 	if err != nil {
 		return deny(rule, "couldn't inspect container %s: %v", id, err)
 	}
-	if managed(labels) {
+	if managed(c.Labels) {
 		return allow(rule)
 	}
-	if p.importOpen() {
+	if g := p.grant(); g != nil && g.hasContainer(c) {
 		return allow("import-" + rule)
 	}
-	return deny(rule, "container %s isn't a FlameKeeper container (only allowed while the import window is open)", id)
-}
-
-func (p *Policy) importOpen() bool {
-	if p.cfg.StateDir == "" {
-		return false
-	}
-	b, err := os.ReadFile(filepath.Join(p.cfg.StateDir, "import-until"))
-	if err != nil {
-		return false
-	}
-	until, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
-	return err == nil && p.now().Unix() < until
+	return deny(rule, "container %s isn't a FlameKeeper container (allowed only when an import grant names it)", id)
 }
 
 func (p *Policy) pull(q url.Values) Decision {
@@ -211,14 +205,14 @@ func (p *Policy) execCreate(ctx context.Context, id string, body []byte) Decisio
 	if e.Privileged || e.User != "" {
 		return deny("exec", "exec may not be privileged or change user")
 	}
-	labels, err := p.insp.ContainerLabels(ctx, id)
+	c, err := p.insp.Container(ctx, id)
 	if errors.Is(err, errNotFound) {
 		return allow("exec")
 	}
 	if err != nil {
 		return deny("exec", "couldn't inspect container %s: %v", id, err)
 	}
-	if !isWorld(labels) {
+	if !isWorld(c.Labels) {
 		return deny("exec", "exec is only allowed in world containers")
 	}
 	return allow("exec")
@@ -250,11 +244,11 @@ func (p *Policy) networkConnect(ctx context.Context, id string, body []byte) Dec
 	if err := json.Unmarshal(body, &c); err != nil || c.Container == "" {
 		return deny("network-connect", "bad body")
 	}
-	labels, err := p.insp.ContainerLabels(ctx, c.Container)
+	ctr, err := p.insp.Container(ctx, c.Container)
 	if err != nil {
 		return deny("network-connect", "couldn't inspect container %s: %v", c.Container, err)
 	}
-	if isWorld(labels) || labels[labelRole] == "controller" {
+	if isWorld(ctr.Labels) || ctr.Labels[labelRole] == "controller" {
 		return allow("network-connect")
 	}
 	return deny("network-connect", "only world containers and the controller (label %s=controller) may join %q",
@@ -273,14 +267,14 @@ type createBody struct {
 	}
 }
 
-func (p *Policy) create(body []byte) Decision {
+func (p *Policy) create(ctx context.Context, body []byte) Decision {
 	var c createBody
 	if err := json.Unmarshal(body, &c); err != nil {
 		return deny("create", "bad create body: %v", err)
 	}
 	switch {
 	case c.Labels[labelHelper] == "true":
-		return p.createHelper(&c)
+		return p.createHelper(ctx, &c)
 	case c.Labels[labelManaged] == "true":
 		return p.createWorld(&c)
 	case c.Labels[labelRole] == "self-update":
@@ -323,15 +317,8 @@ func (p *Policy) createWorld(c *createBody) Decision {
 			return deny(rule, "bind %q: %v", b, err)
 		}
 	}
-	var devices []struct{ PathOnHost, PathInContainer, CgroupPermissions string }
-	if err := unmarshalOpt(hc["Devices"], &devices); err != nil {
-		return deny(rule, "bad Devices: %v", err)
-	}
-	for _, d := range devices {
-		if d.PathOnHost != ntsyncDevice || (d.PathInContainer != "" && d.PathInContainer != ntsyncDevice) ||
-			strings.Trim(d.CgroupPermissions, "rwm") != "" {
-			return deny(rule, "device %q isn't allowed (only %s)", d.PathOnHost, ntsyncDevice)
-		}
+	if d := devicesOnly(rule, hc, ntsyncDevice); !d.Allow {
+		return d
 	}
 	var ports map[string][]struct{ HostIp, HostPort string }
 	if err := unmarshalOpt(hc["PortBindings"], &ports); err != nil {
@@ -353,14 +340,14 @@ func (p *Policy) createWorld(c *createBody) Decision {
 	return allow(rule)
 }
 
-func (p *Policy) createHelper(c *createBody) Decision {
+func (p *Policy) createHelper(ctx context.Context, c *createBody) Decision {
 	const rule = "create-helper"
 	if !p.helperImageAllowed(c.Image) {
 		return deny(rule, "image %q isn't an allowed helper image", c.Image)
 	}
 	hc := c.HostConfig
-	if d := onlyHostConfig(rule, hc, "Binds", "NetworkMode", "VolumesFrom", "LogConfig",
-		"RestartPolicy", "AutoRemove"); !d.Allow {
+	if d := onlyHostConfig(rule, hc, "Binds", "Mounts", "Devices", "NetworkMode", "VolumesFrom",
+		"LogConfig", "RestartPolicy", "AutoRemove"); !d.Allow {
 		return d
 	}
 	if d := p.endpoints(rule, c); !d.Allow {
@@ -369,6 +356,9 @@ func (p *Policy) createHelper(c *createBody) Decision {
 	if d := logConfig(rule, hc); !d.Allow {
 		return d
 	}
+	if rp := str(hc["RestartPolicy"]); rp != "" {
+		return deny(rule, "bad RestartPolicy")
+	}
 	var binds, volumesFrom []string
 	if err := unmarshalOpt(hc["Binds"], &binds); err != nil {
 		return deny(rule, "bad Binds: %v", err)
@@ -376,8 +366,12 @@ func (p *Policy) createHelper(c *createBody) Decision {
 	if err := unmarshalOpt(hc["VolumesFrom"], &volumesFrom); err != nil {
 		return deny(rule, "bad VolumesFrom: %v", err)
 	}
-	if rp := str(hc["RestartPolicy"]); rp != "" {
-		return deny(rule, "bad RestartPolicy")
+	var mounts []map[string]json.RawMessage
+	if err := unmarshalOpt(hc["Mounts"], &mounts); err != nil {
+		return deny(rule, "bad Mounts: %v", err)
+	}
+	if d := devicesOnly(rule, hc, ntsyncDevice); !d.Allow {
+		return d
 	}
 
 	switch mode := str(hc["NetworkMode"]); mode {
@@ -385,37 +379,106 @@ func (p *Policy) createHelper(c *createBody) Decision {
 	case "host":
 		var cmd []string
 		if err := unmarshalOpt(c.Cmd, &cmd); err != nil || !slices.Equal(cmd, hostPortsCmd) ||
-			len(binds) > 0 || len(volumesFrom) > 0 {
+			len(binds) > 0 || len(volumesFrom) > 0 || len(mounts) > 0 {
 			return deny(rule, "host networking is only allowed for %q with no mounts", strings.Join(hostPortsCmd, " "))
 		}
 	default:
 		return deny(rule, "network mode %q isn't allowed", mode)
 	}
 
-	importOpen := p.importOpen()
+	// Writable binds: only DATA_DIR (scratch and staging folders).
 	for _, b := range binds {
-		src, ro, err := parseBind(b)
+		src, _, err := parseBind(b)
 		if err != nil {
 			return deny(rule, "%v", err)
 		}
-		if err := p.checkPath(src, p.cfg.DataDir); err == nil {
-			continue
-		} else if !ro {
+		if err := p.checkPath(src, p.cfg.DataDir); err != nil {
 			return deny(rule, "bind %q: %v", b, err)
 		}
-		if !importOpen {
-			return deny(rule, "bind %q: read-only binds outside DATA_DIR are only allowed while the import window is open", b)
+	}
+	// Host folders: read-only mounts (Docker doesn't create a missing source), from
+	// DATA_DIR or a folder the import grant names.
+	g := p.grant()
+	granted := false // a grant was needed: logged as import-create-helper
+	for _, m := range mounts {
+		d := p.helperMount(rule, m, g)
+		if !d.Allow {
+			return d
 		}
-		if !filepath.IsAbs(src) {
-			return deny(rule, "bind %q: named volumes aren't allowed", b)
-		}
+		granted = granted || d.Rule != rule
 	}
 	for _, v := range volumesFrom {
-		if !strings.HasSuffix(v, ":ro") {
+		ref, ro := strings.CutSuffix(v, ":ro")
+		if !ro {
 			return deny(rule, "volumes_from %q must be read-only (:ro)", v)
 		}
-		if !importOpen {
-			return deny(rule, "volumes_from is only allowed while the import window is open")
+		if !p.grantedContainer(ctx, g, ref) {
+			return deny(rule, "volumes_from %q: allowed only when an import grant names the container", ref)
+		}
+		granted = true
+	}
+	if granted {
+		return allow("import-" + rule)
+	}
+	return allow(rule)
+}
+
+func (p *Policy) helperMount(rule string, m map[string]json.RawMessage, g *importGrant) Decision {
+	for k, v := range m {
+		if !slices.Contains([]string{"Type", "Source", "Target", "ReadOnly", "BindOptions"}, k) && !isZeroJSON(v) {
+			return deny(rule, "mount option %s isn't allowed", k)
+		}
+	}
+	var mt struct {
+		Type, Source, Target string
+		ReadOnly             bool
+		BindOptions          map[string]json.RawMessage
+	}
+	raw, _ := json.Marshal(m)
+	if err := json.Unmarshal(raw, &mt); err != nil {
+		return deny(rule, "bad mount: %v", err)
+	}
+	if mt.Type != "bind" || !mt.ReadOnly {
+		return deny(rule, "mount of %q: only read-only bind mounts are allowed", mt.Source)
+	}
+	for k, v := range mt.BindOptions {
+		switch k {
+		case "Propagation":
+			if prop := str(v); prop != "" && prop != "private" && prop != "rprivate" {
+				return deny(rule, "mount of %q: propagation %q isn't allowed", mt.Source, prop)
+			}
+		case "NonRecursive", "ReadOnlyForceRecursive":
+		default:
+			if !isZeroJSON(v) {
+				return deny(rule, "mount of %q: bind option %s isn't allowed", mt.Source, k)
+			}
+		}
+	}
+	if !filepath.IsAbs(mt.Source) || filepath.Clean(mt.Source) != mt.Source {
+		return deny(rule, "mount of %q: the source must be a clean absolute path", mt.Source)
+	}
+	if err := p.checkPath(mt.Source, p.cfg.DataDir); err == nil {
+		return allow(rule)
+	}
+	if f, bad := forbiddenHostPath(mt.Source); bad {
+		return deny(rule, "mount of %q: %s and the folders around it are never mounted", mt.Source, f)
+	}
+	if g == nil || !g.hasPath(mt.Source) {
+		return deny(rule, "mount of %q: host folders outside DATA_DIR are allowed only when an import grant names them", mt.Source)
+	}
+	return allow("import-" + rule)
+}
+
+// devicesOnly allows HostConfig.Devices to hold only the given device.
+func devicesOnly(rule string, hc map[string]json.RawMessage, device string) Decision {
+	var devices []struct{ PathOnHost, PathInContainer, CgroupPermissions string }
+	if err := unmarshalOpt(hc["Devices"], &devices); err != nil {
+		return deny(rule, "bad Devices: %v", err)
+	}
+	for _, d := range devices {
+		if d.PathOnHost != device || (d.PathInContainer != "" && d.PathInContainer != device) ||
+			strings.Trim(d.CgroupPermissions, "rwm") != "" {
+			return deny(rule, "device %q isn't allowed (only %s)", d.PathOnHost, device)
 		}
 	}
 	return allow(rule)

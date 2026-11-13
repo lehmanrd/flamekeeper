@@ -1,0 +1,37 @@
+{
+ "AttachStderr": true,
+ "AttachStdin": false,
+ "AttachStdout": true,
+ "Cmd": [
+  "find",
+  "/"
+ ],
+ "Domainname": null,
+ "Entrypoint": null,
+ "Env": null,
+ "ExposedPorts": null,
+ "Healthcheck": null,
+ "HostConfig": {
+  "NetworkMode": "default",
+  "VolumesFrom": [
+   "old-server:ro"
+  ]
+ },
+ "Hostname": null,
+ "Image": "busybox:stable",
+ "Labels": {
+  "flamekeeper.managed.helper": "true"
+ },
+ "MacAddress": null,
+ "NetworkDisabled": false,
+ "NetworkingConfig": null,
+ "OpenStdin": false,
+ "Runtime": null,
+ "StdinOnce": false,
+ "StopSignal": null,
+ "StopTimeout": null,
+ "Tty": false,
+ "User": null,
+ "Volumes": null,
+ "WorkingDir": null
+}

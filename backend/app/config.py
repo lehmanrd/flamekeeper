@@ -21,6 +21,8 @@ LABEL_INFRA = f"{APP_SLUG}.infra"
 
 GAME_IMAGE_REPO = "mornedhels/enshrouded-server"
 GAME_MOUNT = "/opt/enshrouded"
+# Faster Wine sync (kernel 6.14+), passed to game containers when the host has it.
+NTSYNC_DEVICE = "/dev/ntsync"
 # Paths inside the game volume (see docs/game-server-behavior.md).
 GAME_SERVER_SUBDIR = "server"
 SERVER_CONFIG_NAME = "enshrouded_server.json"

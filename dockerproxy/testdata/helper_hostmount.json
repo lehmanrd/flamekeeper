@@ -1,0 +1,49 @@
+{
+ "AttachStderr": true,
+ "AttachStdin": false,
+ "AttachStdout": true,
+ "Cmd": [
+  "sh",
+  "-c",
+  "cp",
+  "/host/srv/old-server/savegame"
+ ],
+ "Domainname": null,
+ "Entrypoint": null,
+ "Env": null,
+ "ExposedPorts": null,
+ "Healthcheck": null,
+ "HostConfig": {
+  "Binds": [
+   "/DATA/imports/abc/.stage-1:/out:rw"
+  ],
+  "Mounts": [
+   {
+    "ReadOnly": true,
+    "Source": "/srv/old-server",
+    "Target": "/host/srv/old-server",
+    "Type": "bind"
+   }
+  ],
+  "NetworkMode": "default"
+ },
+ "Hostname": null,
+ "Image": "busybox:stable",
+ "Labels": {
+  "flamekeeper.managed.helper": "true"
+ },
+ "MacAddress": null,
+ "NetworkDisabled": false,
+ "NetworkingConfig": null,
+ "OpenStdin": false,
+ "Runtime": null,
+ "StdinOnce": false,
+ "StopSignal": null,
+ "StopTimeout": null,
+ "Tty": false,
+ "User": null,
+ "Volumes": {
+  "/out": {}
+ },
+ "WorkingDir": null
+}

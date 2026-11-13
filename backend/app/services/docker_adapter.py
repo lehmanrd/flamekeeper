@@ -134,6 +134,8 @@ class DockerAdapter(Protocol):
         network_mode: str | None = None,
         volumes_from: list[str] | None = None,
         timeout: int = 120,
+        ro_mounts: dict[str, str] | None = None,
+        devices: list[str] | None = None,
     ) -> ExecResult: ...
     async def run_detached(
         self,
@@ -542,9 +544,14 @@ class RealDockerAdapter:
         network_mode: str | None = None,
         volumes_from: list[str] | None = None,
         timeout: int = 120,
+        ro_mounts: dict[str, str] | None = None,
+        devices: list[str] | None = None,
     ) -> ExecResult:
         """Run a throwaway container (at most `timeout` seconds). A bind's container path
-        may end in ":ro"."""
+        may end in ":ro"; binds of missing host paths are created by Docker. `ro_mounts`
+        (host path -> container path) are read-only and must exist: for paths outside
+        DATA_DIR, so a typo can't create folders on the host. `devices` are host device
+        paths, mapped to the same path."""
 
         def _do() -> ExecResult:
             try:
@@ -555,16 +562,20 @@ class RealDockerAdapter:
             for h, p in (binds or {}).items():
                 target, ro = (p[:-3], True) if p.endswith(":ro") else (p, False)
                 volumes[h] = {"bind": target, "mode": "ro" if ro else "rw"}
-            c = self.client.containers.run(
+            mounts = [self._docker.types.Mount(target=c, source=h, type="bind", read_only=True)
+                      for h, c in (ro_mounts or {}).items()]
+            c = self.client.containers.create(
                 image,
                 cmd,
-                detach=True,
                 volumes=volumes,
+                mounts=mounts or None,
                 volumes_from=volumes_from,
                 network_mode=network_mode,
+                devices=[f"{d}:{d}" for d in devices] if devices else None,
                 labels={f"{LABEL_MANAGED}.helper": "true"},
             )
-            try:
+            try:  # a missing device only fails here, after the container exists
+                c.start()
                 result = c.wait(timeout=timeout)
                 out = c.logs().decode("utf-8", "replace")
                 return ExecResult(int(result.get("StatusCode", 1)), out)

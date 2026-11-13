@@ -14,7 +14,7 @@ import uuid
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from app.config import GAME_IMAGE_REPO, Settings
+from app.config import GAME_IMAGE_REPO, NTSYNC_DEVICE, Settings
 from app.services.docker_adapter import DockerAdapter
 
 log = logging.getLogger(__name__)
@@ -122,17 +122,19 @@ async def run_selfcheck(settings: Settings, docker: DockerAdapter) -> SelfCheckR
                         f"{free_gb:.0f} GB free ({pct_free:.0f}%) on {data_dir}. "
                         "Recommended: 30 GB per world."))
 
-    # ntsync (kernel >= 6.14): look at the host's /dev via a helper container.
+    # ntsync (kernel >= 6.14): ask Docker for the device in a helper container. Docker
+    # refuses to start it when the host has no /dev/ntsync, so the host's /dev never
+    # has to be mounted (docs/socket-proxy.md).
     try:
         if settings.in_container or settings.fake_docker:
             res = await docker.run_helper(settings.helper_image,
-                                          ["sh", "-c", "test -c /hostdev/ntsync"],
-                                          binds={"/dev": "/hostdev"})
+                                          ["test", "-c", NTSYNC_DEVICE],
+                                          devices=[NTSYNC_DEVICE])
             result.ntsync_available = res.exit_code == 0
         else:
             from pathlib import Path
 
-            result.ntsync_available = Path("/dev/ntsync").exists()
+            result.ntsync_available = Path(NTSYNC_DEVICE).exists()
     except Exception:
         result.ntsync_available = False
     checks.append(Check("ntsync", "ntsync", "ok" if result.ntsync_available else "skip",

@@ -47,17 +47,20 @@ func (d dockerInspector) get(ctx context.Context, path string, out any) error {
 	return json.NewDecoder(res.Body).Decode(out)
 }
 
-func (d dockerInspector) ContainerLabels(ctx context.Context, id string) (map[string]string, error) {
+func (d dockerInspector) Container(ctx context.Context, ref string) (containerInfo, error) {
 	var c struct {
+		ID     string `json:"Id"`
+		Name   string
 		Config struct{ Labels map[string]string }
 	}
-	if err := d.get(ctx, "/containers/"+url.PathEscape(id)+"/json", &c); err != nil {
-		return nil, err
+	if err := d.get(ctx, "/containers/"+url.PathEscape(ref)+"/json", &c); err != nil {
+		return containerInfo{}, err
 	}
-	if c.Config.Labels == nil {
-		return map[string]string{}, nil
+	labels := c.Config.Labels
+	if labels == nil {
+		labels = map[string]string{}
 	}
-	return c.Config.Labels, nil
+	return containerInfo{ID: c.ID, Name: strings.TrimPrefix(c.Name, "/"), Labels: labels}, nil
 }
 
 func (d dockerInspector) NetworkName(ctx context.Context, id string) (string, error) {

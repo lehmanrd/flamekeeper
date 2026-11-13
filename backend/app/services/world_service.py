@@ -24,6 +24,7 @@ from app.config import (
     LABEL_MANAGED,
     LABEL_VERSION,
     LABEL_WORLD_ID,
+    NTSYNC_DEVICE,
     SCHEMA_VERSION,
     Settings,
     is_root,
@@ -58,7 +59,6 @@ Seed = Callable[[JobContext, World], Awaitable[None]]
 
 log = logging.getLogger(__name__)
 
-NTSYNC_DEVICE = "/dev/ntsync"
 WAIT_EMPTY_POLL_S = 30
 FIRST_BOOT_TIMEOUT_S = 90 * 60
 BOOT_TIMEOUT_S = 10 * 60

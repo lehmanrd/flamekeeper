@@ -30,7 +30,8 @@ func fakeDocker(t *testing.T) string {
 		if r.PathValue("id") == "managed" {
 			labels = world
 		}
-		json.NewEncoder(w).Encode(map[string]any{"Config": map[string]any{"Labels": labels}})
+		json.NewEncoder(w).Encode(map[string]any{"Id": "id-" + r.PathValue("id"), "Name": "/" + r.PathValue("id"),
+			"Config": map[string]any{"Labels": labels}})
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)

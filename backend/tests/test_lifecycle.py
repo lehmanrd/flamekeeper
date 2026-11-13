@@ -8,11 +8,13 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.services.docker_adapter import ContainerSpec, RealDockerAdapter
 from app.services.docker_fake import FakeDockerAdapter
+from app.services.selfcheck import run_selfcheck
 from tests.conftest import wait_for, wait_job
 
 
@@ -284,3 +286,17 @@ def test_restarts_by_flamekeeper_are_not_a_crash_loop(client: TestClient) -> Non
     assert wait_for(lambda: client.get(f"/api/worlds/{wid}").json()["state"] == "online")
     time.sleep(0.5)
     assert client.get(f"/api/worlds/{wid}").json()["state"] == "online"
+
+
+@pytest.mark.parametrize("present", [True, False])
+def test_ntsync_check_asks_for_the_device(settings: Settings, present: bool) -> None:
+    """The check requests /dev/ntsync from Docker (which fails without it) instead of
+    mounting the host's /dev (docs/socket-proxy.md)."""
+    fake = FakeDockerAdapter()
+    if not present:
+        fake.host_devices.clear()
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    result = asyncio.run(run_selfcheck(settings, fake))
+    assert result.ntsync_available is present
+    run = next(r for r in fake.helper_runs if r["devices"])
+    assert run["devices"] == ["/dev/ntsync"] and not run["binds"] and not run["ro_mounts"]

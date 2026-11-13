@@ -38,6 +38,8 @@ class FakeDockerAdapter:
         self.exec_calls: list[tuple[str, list[str]]] = []
         self.calls: list[tuple[str, str]] = []
         self.host_udp_ports: set[int] = set()
+        # Host devices a helper can be given (the ntsync check).
+        self.host_devices: set[str] = {"/dev/ntsync"}
         self.boot_delay = boot_delay
         self.emit_host_online = emit_host_online
         # Steam: the build a fresh install gets, and what steamcmd says is the latest.
@@ -56,6 +58,8 @@ class FakeDockerAdapter:
         self.layers: dict[str, dict[str, Path]] = {}
         self.volumes: set[str] = set()
         self.helper_calls: list[list[str]] = []
+        # Every helper's mounts, to check what the host exposes to it.
+        self.helper_runs: list[dict[str, Any]] = []
 
     # -- test helpers ----------------------------------------------------------------
 
@@ -445,8 +449,27 @@ class FakeDockerAdapter:
         network_mode: str | None = None,
         volumes_from: list[str] | None = None,
         timeout: int = 120,
+        ro_mounts: dict[str, str] | None = None,
+        devices: list[str] | None = None,
     ) -> ExecResult:
         self.helper_calls.append(cmd)
+        self.helper_runs.append({"cmd": cmd, "binds": dict(binds or {}),
+                                 "ro_mounts": dict(ro_mounts or {}),
+                                 "volumes_from": list(volumes_from or []),
+                                 "devices": list(devices or []), "network_mode": network_mode})
+        for d in devices or []:
+            if d not in self.host_devices:
+                raise DockerError("error gathering device information while adding custom "
+                                  f'device "{d}": no such file or directory')
+        for host in ro_mounts or {}:
+            if not Path(host).exists():
+                raise DockerError('invalid mount config for type "bind": bind source path '
+                                  f"does not exist: {host}")
+        # Read-only mounts behave like ":ro" binds from here on.
+        if ro_mounts:
+            binds = {**(binds or {}), **{h: f"{c}:ro" for h, c in ro_mounts.items()}}
+        if devices and cmd[:2] == ["test", "-c"]:
+            return ExecResult(0, "")
         if cmd and cmd[0] == "find":
             return self._helper_find(cmd, binds or {}, volumes_from or [])
         if cmd[:2] == ["sh", "-c"] and "cp -a" in cmd[2]:
@@ -471,8 +494,6 @@ class FakeDockerAdapter:
             return ExecResult(0, "\n".join(lines) + "\n")
         if binds and "test -f" in joined:
             # Path-match check: the marker exists if the host path exists locally.
-            from pathlib import Path
-
             marker = joined.split("test -f ", 1)[1].split()[0]
             host_dir = next(iter(binds))
             container_dir = binds[host_dir]
@@ -487,7 +508,7 @@ class FakeDockerAdapter:
             if path == target or path.startswith(target + "/"):
                 return Path(host) / path[len(target):].lstrip("/")
         for name in volumes_from:
-            c = self._require(name)
+            c = self._require(name.removesuffix(":ro"))
             # --volumes-from shares mounts only, not the container layer.
             for m in c.mounts:
                 if path == m.destination or path.startswith(m.destination + "/"):

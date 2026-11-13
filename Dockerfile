@@ -28,8 +28,8 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY backend/ ./
 COPY --from=ui /ui/dist ./app/static
 COPY --from=proxy /fk-dockerproxy /usr/local/bin/fk-dockerproxy
-# Where the proxy's socket lives; a named volume mounted here copies this ownership.
-RUN mkdir -p /run/fk && chown 65534:65534 /run/fk
+# Where the proxy's socket lives (a named volume shared with the controller).
+RUN mkdir -p /run/fk
 
 ARG VERSION=dev
 ARG REPO=lehmanrd/flamekeeper
