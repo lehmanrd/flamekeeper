@@ -1,0 +1,39 @@
+{
+ "AttachStderr": false,
+ "AttachStdin": false,
+ "AttachStdout": false,
+ "Cmd": [
+  "cat",
+  "/host/x"
+ ],
+ "Domainname": null,
+ "Entrypoint": null,
+ "Env": null,
+ "ExposedPorts": null,
+ "Healthcheck": null,
+ "HostConfig": {
+  "Binds": [
+   "/:/host:ro"
+  ],
+  "NetworkMode": "default"
+ },
+ "Hostname": null,
+ "Image": "busybox:stable",
+ "Labels": {
+  "flamekeeper.managed.helper": "true"
+ },
+ "MacAddress": null,
+ "NetworkDisabled": false,
+ "NetworkingConfig": null,
+ "OpenStdin": false,
+ "Runtime": null,
+ "StdinOnce": false,
+ "StopSignal": null,
+ "StopTimeout": null,
+ "Tty": false,
+ "User": null,
+ "Volumes": {
+  "/host": {}
+ },
+ "WorkingDir": null
+}

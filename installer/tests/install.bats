@@ -225,3 +225,203 @@ STUB
   run bash "$TMP/fk" update --frob
   [ "$status" -ne 0 ]
 }
+
+# A host for `flamekeeper update-request`: .env, a request folder, and a fake curl whose
+# "installer" prints its arguments (and fails if FAIL_INSTALL is set).
+update_request_host() {
+  sed -e 's#__FK_REPO__#someone/flamekeeper#' "$ROOT/installer/flamekeeper" >"$TMP/fk"
+  mkdir -p "$FK_INSTALL_DIR" "$TMP/data/self-update" "$TMP/stub"
+  printf 'FLAMEKEEPER_IMAGE=ghcr.io/someone/flamekeeper:0.4.1\nDATA_DIR=%s\n' "$TMP/data" \
+    >"$FK_INSTALL_DIR/.env"
+  cat >"$TMP/stub/curl" <<'STUB'
+#!/usr/bin/env bash
+while [[ $# -gt 0 ]]; do
+  case "$1" in -o) out="$2"; shift ;; https://*) echo "url=$1" >&2 ;; esac
+  shift
+done
+printf 'echo "installer args: $*"; [[ -z "${FAIL_INSTALL:-}" ]]\n' >"$out"
+STUB
+  chmod +x "$TMP/stub/curl"
+}
+
+update_request() { PATH="$TMP/stub:$PATH" run bash "$TMP/fk" update-request; }
+status_json() { cat "$FK_INSTALL_DIR/self-update/status.json"; }
+
+@test "update-request runs the update and reports to the install folder" {
+  [ "$(id -u)" -eq 0 ] || skip "needs root"
+  update_request_host
+  echo "0.5.0 0123456789abcdef" >"$TMP/data/self-update/request"
+  update_request
+  [ "$status" -eq 0 ]
+  [ ! -e "$TMP/data/self-update/request" ]
+  grep -q "releases/download/v0.5.0/install.sh" "$FK_INSTALL_DIR/self-update/update.log"
+  grep -q "installer args: --yes --no-firewall --version 0.5.0" "$FK_INSTALL_DIR/self-update/update.log"
+  [[ "$(status_json)" == *'"id": "0123456789abcdef"'*'"state": "succeeded", "exit_code": 0'* ]]
+  # Nothing is written back into DATA_DIR, where the controller could plant symlinks.
+  [ -z "$(ls -A "$TMP/data/self-update")" ]
+
+  echo "0.5.0 0123456789abcdef" >"$TMP/data/self-update/request"
+  export FAIL_INSTALL=1
+  update_request
+  [ "$status" -ne 0 ]
+  [[ "$(status_json)" == *'"state": "failed", "exit_code": 1'* ]]
+}
+
+@test "update-request treats the request as untrusted" {
+  [ "$(id -u)" -eq 0 ] || skip "needs root"
+  update_request_host
+  local req="$TMP/data/self-update/request" bad
+  for bad in "0.5.0" "0.5.0 xyz" "0.5.0; rm -rf / 0123456789abcdef" '$(id) 0123456789abcdef' \
+    "0.5.0 0123456789abcdef extra" "../0.5.0 0123456789abcdef" "v0.5.0 0123456789abcdef"; do
+    printf '%s\n' "$bad" >"$req"
+    update_request
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"malformed"* ]]
+    [ ! -e "$req" ]
+    [ ! -e "$FK_INSTALL_DIR/self-update/status.json" ]
+  done
+
+  # Not newer than what's installed: refused, and the controller is told why.
+  echo "0.4.1 0123456789abcdef" >"$req"
+  update_request
+  [ "$status" -ne 0 ]
+  [[ "$(status_json)" == *'"state": "failed"'*"isn't newer than the installed 0.4.1"* ]]
+  echo "0.3.9 0123456789abcdef" >"$req"
+  update_request
+  [ "$status" -ne 0 ]
+
+  # A symlink or a FIFO instead of a file: removed, never read.
+  echo "0.5.0 0123456789abcdef" >"$TMP/elsewhere"
+  ln -s "$TMP/elsewhere" "$req"
+  update_request
+  [ "$status" -ne 0 ] && [ ! -e "$req" ] && [ ! -L "$req" ] && [ -e "$TMP/elsewhere" ]
+  mkfifo "$req"
+  update_request
+  [ "$status" -ne 0 ] && [ ! -e "$req" ]
+
+  # A symlinked request folder (pointing the rm elsewhere) is refused.
+  rm -r "$TMP/data/self-update"
+  mkdir "$TMP/other"
+  echo "0.5.0 0123456789abcdef" >"$TMP/other/request"
+  ln -s "$TMP/other" "$TMP/data/self-update"
+  update_request
+  [ "$status" -ne 0 ] && [[ "$output" == *"isn't a plain folder"* ]] && [ -e "$TMP/other/request" ]
+}
+
+@test "install_updater installs the systemd units, or explains without systemd" {
+  FK_BIN_DIR="$TMP/bin" FK_DATA_DIR="$TMP/data" FK_SYSTEMD_DIR="$TMP/systemd"
+  mkdir -p "$TMP/stub" "$FK_INSTALL_DIR/self-update"
+  printf '#!/usr/bin/env bash\necho "systemctl $*" >>"%s/systemctl.log"\n' "$TMP" >"$TMP/stub/systemctl"
+  chmod +x "$TMP/stub/systemctl"
+  PATH="$TMP/stub:$PATH"
+  has_systemd() { true; }
+  install_updater >/dev/null
+  grep -qx "PathExists=$TMP/data/self-update/request" "$TMP/systemd/flamekeeper-update.path"
+  grep -qx "ExecStart=$TMP/bin/flamekeeper update-request" "$TMP/systemd/flamekeeper-update.service"
+  grep -qx "Type=oneshot" "$TMP/systemd/flamekeeper-update.service"
+  grep -q "systemctl enable --now flamekeeper-update.path" "$TMP/systemctl.log"
+  [ "$(cat "$FK_INSTALL_DIR/self-update/updater")" = systemd ]
+
+  has_systemd() { false; }
+  run install_updater
+  [ "$status" -eq 0 ] && [[ "$output" == *"sudo flamekeeper update"* ]]
+  [ ! -e "$FK_INSTALL_DIR/self-update/updater" ]
+}
+
+@test "write_files mounts the host's update folder read-only into the controller" {
+  FK_BIN_DIR="$TMP/bin" FK_DATA_DIR="$TMP/data" DOCKER_SOCK=/var/run/docker.sock
+  mkdir -p "$FK_BIN_DIR"
+  write_files >/dev/null
+  grep -qx "      - $FK_INSTALL_DIR/self-update:/var/lib/flamekeeper/host-update:ro" \
+    "$FK_INSTALL_DIR/docker-compose.yml"
+  [ -d "$FK_INSTALL_DIR/self-update" ]
+}
+
+# A host for `flamekeeper import`: an install folder and a fake docker that knows an old
+# server container and one of FlameKeeper's own.
+import_host() {
+  sed -e 's#__FK_REPO__#someone/flamekeeper#' "$ROOT/installer/flamekeeper" >"$TMP/fk"
+  mkdir -p "$FK_INSTALL_DIR" "$TMP/stub" "$TMP/old-server"
+  touch "$FK_INSTALL_DIR/docker-compose.yml"
+  cat >"$TMP/stub/docker" <<'STUB'
+#!/usr/bin/env bash
+[[ "$1" == info ]] && exit 0
+name="${*: -1}"
+case "$name" in old-server | flamekeeper-embervale) ;; *) exit 1 ;; esac
+if [[ "$*" == *--format* ]]; then
+  [[ "$name" == flamekeeper-embervale ]] && echo true || echo ""
+fi
+STUB
+  chmod +x "$TMP/stub/docker"
+}
+
+fk_import() { PATH="$TMP/stub:$PATH" run bash "$TMP/fk" import "$@"; }
+grant() { cat "$FK_INSTALL_DIR/proxy/import.json"; }
+
+@test "flamekeeper import --allow writes a one-hour grant for the proxy" {
+  [ "$(id -u)" -eq 0 ] || skip "needs root"
+  import_host
+  fk_import
+  [ "$status" -eq 0 ] && [[ "$output" == *"may not import from anything"* ]]
+
+  fk_import --allow "$TMP/old-server" old-server
+  [ "$status" -eq 0 ]
+  [[ "$(grant)" =~ ^\{\"until\":\ [0-9]+,\ \"paths\":\ \[\"$TMP/old-server\"\],\ \"containers\":\ \[\"old-server\"\]\}$ ]]
+  local until
+  until="$(grant | sed 's/.*"until": \([0-9]*\).*/\1/')"
+  [ $((until - $(date +%s))) -gt 3500 ] && [ $((until - $(date +%s))) -le 3600 ]
+  fk_import
+  [[ "$output" == *"folder     $TMP/old-server"* && "$output" == *"container  old-server"* ]]
+
+  # A symlink is resolved: the proxy compares the real folder.
+  ln -s "$TMP/old-server" "$TMP/link"
+  fk_import --allow "$TMP/link"
+  [ "$status" -eq 0 ] && [[ "$output" == *"enter $TMP/old-server in FlameKeeper"* ]]
+  [[ "$(grant)" == *"\"paths\": [\"$TMP/old-server\"], \"containers\": []"* ]]
+
+  fk_import --done
+  [ "$status" -eq 0 ] && [ ! -e "$FK_INSTALL_DIR/proxy/import.json" ]
+}
+
+@test "flamekeeper import refuses what it shouldn't allow" {
+  [ "$(id -u)" -eq 0 ] || skip "needs root"
+  import_host
+  mkdir -p "$TMP/we\"ird"
+  local bad
+  for bad in / "$TMP/nope" "$TMP/we\"ird" "$FK_INSTALL_DIR/docker-compose.yml" \
+    flamekeeper-embervale no-such-container '$(id)' "-rf"; do
+    fk_import --allow "$bad"
+    [ "$status" -ne 0 ]
+  done
+  [ ! -e "$FK_INSTALL_DIR/proxy/import.json" ]
+  fk_import --allow
+  [ "$status" -ne 0 ]
+}
+
+@test "the controller reaches Docker only through the proxy" {
+  FK_BIN_DIR="$TMP/bin" FK_DATA_DIR="$TMP/data" DOCKER_SOCK=/var/run/docker.sock
+  mkdir -p "$FK_BIN_DIR"
+  write_files >/dev/null
+  local compose="$FK_INSTALL_DIR/docker-compose.yml" controller
+  # The socket is mounted once, in the dockerproxy service.
+  [ "$(grep -c ":/var/run/docker.sock" "$compose")" -eq 1 ]
+  controller="$(sed -n '/^  flamekeeper:/,$p' "$compose")"
+  [[ "$controller" != *"/var/run/docker.sock"* ]]
+  [[ "$controller" == *"DOCKER_HOST=unix:///run/fk/docker.sock"* ]]
+  [[ "$controller" == *"flamekeeper.role: controller"* ]]
+  grep -q "      - $FK_INSTALL_DIR/proxy:/var/lib/fk-dockerproxy:ro" "$compose"
+  [ -d "$FK_INSTALL_DIR/proxy" ]
+}
+
+@test "the proxy mode defaults to enforce and keeps an admin's audit" {
+  resolve_settings
+  [ "$FK_PROXY_MODE" = enforce ]
+  render_env | grep -qx "FK_PROXY_MODE=enforce"
+  mkdir -p "$FK_INSTALL_DIR"
+  echo "FK_PROXY_MODE=audit" >"$FK_INSTALL_DIR/.env"
+  resolve_settings
+  [ "$FK_PROXY_MODE" = audit ]
+  echo "FK_PROXY_MODE=off" >"$FK_INSTALL_DIR/.env"
+  resolve_settings
+  [ "$FK_PROXY_MODE" = enforce ]
+}

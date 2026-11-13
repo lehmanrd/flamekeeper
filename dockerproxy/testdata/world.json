@@ -1,0 +1,75 @@
+{
+ "AttachStderr": true,
+ "AttachStdin": false,
+ "AttachStdout": true,
+ "Cmd": null,
+ "Domainname": null,
+ "Entrypoint": null,
+ "Env": [
+  "PUID=4711"
+ ],
+ "ExposedPorts": {
+  "15637/udp": {}
+ },
+ "Healthcheck": null,
+ "HostConfig": {
+  "Devices": [
+   {
+    "CgroupPermissions": "rwm",
+    "PathInContainer": "/dev/ntsync",
+    "PathOnHost": "/dev/ntsync"
+   }
+  ],
+  "LogConfig": {
+   "Config": {
+    "max-file": "5",
+    "max-size": "20m"
+   },
+   "Type": "json-file"
+  },
+  "Memory": 8589934592,
+  "Mounts": [
+   {
+    "Source": "flamekeeper-data",
+    "Target": "/opt/enshrouded",
+    "Type": "volume",
+    "VolumeOptions": {
+     "Subpath": "worlds/embervale/game"
+    }
+   }
+  ],
+  "NanoCpus": 2000000000,
+  "NetworkMode": "flamekeeper",
+  "PortBindings": {
+   "15637/udp": [
+    {
+     "HostIp": "0.0.0.0",
+     "HostPort": "15637"
+    }
+   ]
+  },
+  "RestartPolicy": {
+   "Name": "unless-stopped"
+  }
+ },
+ "Hostname": "flamekeeper-embervale",
+ "Image": "mornedhels/enshrouded-server:stable-wine",
+ "Labels": {
+  "flamekeeper.infra": "x",
+  "flamekeeper.managed": "true",
+  "flamekeeper.version": "1",
+  "flamekeeper.world_id": "w1"
+ },
+ "MacAddress": null,
+ "NetworkDisabled": false,
+ "NetworkingConfig": null,
+ "OpenStdin": false,
+ "Runtime": null,
+ "StdinOnce": false,
+ "StopSignal": null,
+ "StopTimeout": 90,
+ "Tty": false,
+ "User": null,
+ "Volumes": null,
+ "WorkingDir": null
+}

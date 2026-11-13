@@ -14,8 +14,8 @@ import uuid
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from app.config import GAME_IMAGE_REPO, Settings
-from app.services.docker_adapter import DockerAdapter
+from app.config import GAME_IMAGE_REPO, NTSYNC_DEVICE, Settings
+from app.services.docker_adapter import MIN_API, DockerAdapter
 
 log = logging.getLogger(__name__)
 
@@ -61,9 +61,15 @@ async def run_selfcheck(settings: Settings, docker: DockerAdapter) -> SelfCheckR
     try:
         version = await docker.ping()
         result.docker_version = version.get("Version")
-        checks.append(Check("docker", "Docker socket", "ok",
-                            f"Docker {version.get('Version')} (API {version.get('ApiVersion')})",
-                            fatal=True))
+        api = tuple(int(x) for x in str(version.get("ApiVersion", "0.0")).split(".")[:2])
+        detail = f"Docker {version.get('Version')} (API {version.get('ApiVersion')})"
+        if api < MIN_API:
+            checks.append(Check("docker", "Docker socket", "fail",
+                                f"{detail} is too old: FlameKeeper needs Docker Engine 26 or "
+                                "newer (API 1.45) to mount world folders safely. Upgrade "
+                                "Docker: https://docs.docker.com/engine/install/", fatal=True))
+            return result
+        checks.append(Check("docker", "Docker socket", "ok", detail, fatal=True))
     except Exception as e:
         checks.append(Check("docker", "Docker socket", "fail",
                             f"Cannot reach the Docker daemon: {e}. Mount /var/run/docker.sock.",
@@ -119,20 +125,23 @@ async def run_selfcheck(settings: Settings, docker: DockerAdapter) -> SelfCheckR
     pct_free = usage.free * 100 / usage.total if usage.total else 0
     status = "ok" if usage.free >= MIN_FREE_BYTES and pct_free >= 10 else "warn"
     checks.append(Check("disk", "Disk free", status,
-                        f"{free_gb:.0f} GB free ({pct_free:.0f}%) on {data_dir}. "
-                        "Recommended: 30 GB per world."))
+                        f"{free_gb:.0f} GB free ({pct_free:.0f}%) on the host disk that holds "
+                        f"{data_dir}. Worlds use this disk directly, with no size limit; Keen "
+                        "recommends about 30 GB per server."))
 
-    # ntsync (kernel >= 6.14): look at the host's /dev via a helper container.
+    # ntsync (kernel >= 6.14): ask Docker for the device in a helper container. Docker
+    # refuses to start it when the host has no /dev/ntsync, so the host's /dev never
+    # has to be mounted (docs/socket-proxy.md).
     try:
         if settings.in_container or settings.fake_docker:
             res = await docker.run_helper(settings.helper_image,
-                                          ["sh", "-c", "test -c /hostdev/ntsync"],
-                                          binds={"/dev": "/hostdev"})
+                                          ["test", "-c", NTSYNC_DEVICE],
+                                          devices=[NTSYNC_DEVICE])
             result.ntsync_available = res.exit_code == 0
         else:
             from pathlib import Path
 
-            result.ntsync_available = Path("/dev/ntsync").exists()
+            result.ntsync_available = Path(NTSYNC_DEVICE).exists()
     except Exception:
         result.ntsync_available = False
     checks.append(Check("ntsync", "ntsync", "ok" if result.ntsync_available else "skip",

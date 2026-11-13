@@ -25,6 +25,18 @@ ProgressCb = Callable[[int | None, str], None]
 
 
 @dataclass
+class VolumeMount:
+    """A subpath of a named volume (Docker 26+): Docker resolves it inside the volume."""
+    volume: str
+    subpath: str
+    target: str
+
+
+# Volume subpaths need API 1.45 (Docker Engine 26).
+MIN_API = (1, 45)
+
+
+@dataclass
 class ContainerSpec:
     name: str
     image: str
@@ -33,13 +45,14 @@ class ContainerSpec:
     env: dict[str, str]
     # "15637/udp" -> (host_ip, host_port)
     ports: dict[str, tuple[str, int]]
-    # host_path -> container_path
-    binds: dict[str, str]
+    # host_path -> container_path (world containers have none: see VolumeMount)
+    binds: dict[str, str] = field(default_factory=dict)
     devices: list[str] = field(default_factory=list)
     stop_timeout: int = 90
     nano_cpus: int | None = None
     mem_limit_bytes: int | None = None
     network: str | None = None
+    volumes: list[VolumeMount] = field(default_factory=list)
 
 
 @dataclass
@@ -125,6 +138,7 @@ class DockerAdapter(Protocol):
     async def image_exists(self, image: str) -> bool: ...
     async def pull(self, image: str, progress: ProgressCb | None = None) -> None: ...
     async def ensure_network(self, name: str) -> None: ...
+    async def ensure_data_volume(self, name: str, device: Path) -> None: ...
     async def connect_network(self, network: str, name_or_id: str) -> None: ...
     async def run_helper(
         self,
@@ -134,20 +148,13 @@ class DockerAdapter(Protocol):
         network_mode: str | None = None,
         volumes_from: list[str] | None = None,
         timeout: int = 120,
+        ro_mounts: dict[str, str] | None = None,
+        devices: list[str] | None = None,
     ) -> ExecResult: ...
-    async def run_detached(
-        self,
-        name: str,
-        image: str,
-        cmd: list[str],
-        *,
-        labels: dict[str, str],
-        privileged: bool = False,
-        pid_host: bool = False,
-    ) -> ContainerInfo: ...
     async def stats(self, name_or_id: str) -> ContainerStats | None: ...
     async def local_digest(self, image: str) -> str | None: ...
     async def registry_digest(self, image: str) -> str | None: ...
+    async def import_grant(self) -> dict[str, Any] | None: ...
 
 
 def _parse_ts(value: str | None) -> datetime | None:
@@ -290,7 +297,9 @@ class RealDockerAdapter:
             api = self.client.api
             host_config = api.create_host_config(
                 port_bindings={k: (ip, port) for k, (ip, port) in spec.ports.items()},
-                binds={h: {"bind": c, "mode": "rw"} for h, c in spec.binds.items()},
+                binds={h: {"bind": c, "mode": "rw"} for h, c in spec.binds.items()} or None,
+                mounts=[{"Type": "volume", "Source": v.volume, "Target": v.target,
+                         "VolumeOptions": {"Subpath": v.subpath}} for v in spec.volumes] or None,
                 restart_policy={"Name": "unless-stopped"},
                 devices=[f"{d}:{d}:rwm" for d in spec.devices] or None,
                 nano_cpus=spec.nano_cpus,
@@ -525,6 +534,25 @@ class RealDockerAdapter:
 
         await self._run(_do)
 
+    async def ensure_data_volume(self, name: str, device: Path) -> None:
+        """The local volume bound to `device` (DATA_DIR). One by that name that's bound
+        elsewhere is an error: Docker would mount it as the worlds' game folders."""
+        opts = {"type": "none", "o": "bind", "device": str(device)}
+
+        def _do() -> None:
+            try:
+                v = self.client.volumes.get(name)
+            except self._docker.errors.NotFound:
+                self.client.volumes.create(name, driver="local", driver_opts=opts,
+                                           labels={LABEL_MANAGED: "true"})
+                return
+            if ((v.attrs.get("Driver") or "local") != "local"
+                    or (v.attrs.get("Options") or {}) != opts):
+                raise DockerError(f"The Docker volume {name} exists but isn't bound to "
+                                  f"{device}. Remove it: docker volume rm {name}")
+
+        await self._run(_do)
+
     async def connect_network(self, network: str, name_or_id: str) -> None:
         def _do() -> None:
             net = self.client.networks.get(network)
@@ -542,9 +570,14 @@ class RealDockerAdapter:
         network_mode: str | None = None,
         volumes_from: list[str] | None = None,
         timeout: int = 120,
+        ro_mounts: dict[str, str] | None = None,
+        devices: list[str] | None = None,
     ) -> ExecResult:
         """Run a throwaway container (at most `timeout` seconds). A bind's container path
-        may end in ":ro"."""
+        may end in ":ro"; binds of missing host paths are created by Docker. `ro_mounts`
+        (host path -> container path) are read-only and must exist: for paths outside
+        DATA_DIR, so a typo can't create folders on the host. `devices` are host device
+        paths, mapped to the same path."""
 
         def _do() -> ExecResult:
             try:
@@ -555,42 +588,25 @@ class RealDockerAdapter:
             for h, p in (binds or {}).items():
                 target, ro = (p[:-3], True) if p.endswith(":ro") else (p, False)
                 volumes[h] = {"bind": target, "mode": "ro" if ro else "rw"}
-            c = self.client.containers.run(
+            mounts = [self._docker.types.Mount(target=c, source=h, type="bind", read_only=True)
+                      for h, c in (ro_mounts or {}).items()]
+            c = self.client.containers.create(
                 image,
                 cmd,
-                detach=True,
                 volumes=volumes,
+                mounts=mounts or None,
                 volumes_from=volumes_from,
                 network_mode=network_mode,
+                devices=[f"{d}:{d}" for d in devices] if devices else None,
                 labels={f"{LABEL_MANAGED}.helper": "true"},
             )
-            try:
+            try:  # a missing device only fails here, after the container exists
+                c.start()
                 result = c.wait(timeout=timeout)
                 out = c.logs().decode("utf-8", "replace")
                 return ExecResult(int(result.get("StatusCode", 1)), out)
             finally:
                 c.remove(force=True)
-
-        return await self._run(_do)
-
-    async def run_detached(
-        self,
-        name: str,
-        image: str,
-        cmd: list[str],
-        *,
-        labels: dict[str, str],
-        privileged: bool = False,
-        pid_host: bool = False,
-    ) -> ContainerInfo:
-        """Start a container and return at once; it's left for the caller to remove."""
-
-        def _do() -> ContainerInfo:
-            c = self.client.containers.run(
-                image, cmd, name=name, detach=True, labels=labels, privileged=privileged,
-                pid_mode="host" if pid_host else None,
-            )
-            return self._info(self.client.containers.get(c.id))
 
         return await self._run(_do)
 
@@ -624,6 +640,24 @@ class RealDockerAdapter:
         def _do() -> str | None:
             data = self.client.images.get_registry_data(image)
             return data.id
+
+        return await self._run(_do)
+
+    async def import_grant(self) -> dict[str, Any] | None:
+        """What the host admin allowed the importer to touch, from the docker proxy
+        (docs/socket-proxy.md): {"active", "until", "paths", "containers"}. None when
+        FlameKeeper talks to Docker directly, which allows everything."""
+
+        def _do() -> dict[str, Any] | None:
+            api = self.client.api
+            res = api.get(api._url("/_fk/import-grant"))
+            if res.status_code != 200:
+                return None
+            try:
+                data = res.json()
+            except ValueError:
+                return None
+            return data if isinstance(data, dict) and "active" in data else None
 
         return await self._run(_do)
 

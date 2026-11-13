@@ -31,7 +31,9 @@ What the installer does, in order:
 
 1. Checks the machine: Linux, x86-64 (the Enshrouded server is x86-64 only), systemd.
 2. Installs Docker if it's missing (it asks first), using Docker's official script or
-   your distro's packages, and the `docker compose` plugin.
+   your distro's packages, and the `docker compose` plugin. FlameKeeper needs Docker
+   Engine 26 or newer (some distributions' own packages, like Debian 12's `docker.io`,
+   are older; the installer tells you).
 3. Warns (but doesn't stop) if the machine is below Keen's guidance per server:
    16 GB RAM, 6 CPU cores, 30 GB disk.
 4. Writes `/opt/flamekeeper/docker-compose.yml` and `.env`, creates `/srv/flamekeeper`.
@@ -68,6 +70,8 @@ flamekeeper logs [-f]         controller logs
 flamekeeper update            upgrade to the latest release (keeps settings)
                               [--version X] [--no-firewall]
 flamekeeper doctor            check Docker, disk and the self-check
+flamekeeper import --allow X  let FlameKeeper import from folder or container X for an hour
+                              (import --done withdraws it, import shows it)
 flamekeeper reset-admin       set the admin username and password (e.g. forgotten password)
 flamekeeper start|stop|restart
 flamekeeper uninstall [--purge]
@@ -82,7 +86,8 @@ everything, including saves, after asking you to type `flamekeeper`.
 Use [`docker-compose.example.yml`](docker-compose.example.yml). The one rule: mount the data
 directory at the **same path** inside and outside the container (`/srv/flamekeeper:/srv/flamekeeper`).
 FlameKeeper creates game containers through the host's Docker, which needs host paths. It
-checks this at startup and tells you if it's wrong.
+checks this at startup and tells you if it's wrong. The example includes the Docker proxy
+(see [Security](#security)); to import a server, write the grant file it describes yourself.
 
 ### Updating FlameKeeper
 
@@ -94,13 +99,17 @@ Settings, worlds and backups are kept. Discord gets a message when a release is 
 when the update finishes (or fails).
 
 The button runs `flamekeeper update` on the server for you, so it's only offered on
-installs made with the installer; otherwise the card shows what to run. To do it from a
+installs made with the installer on a host with systemd; otherwise the card shows what to
+run. To do it from a
 terminal instead: `sudo flamekeeper update`. To stop the checks, turn off "Check GitHub
 for new FlameKeeper releases" under Settings → Defaults & checks.
 
-How it works: a container can't replace itself, so FlameKeeper starts a short-lived helper
-container (privileged, in the host's process namespace) that runs the host's
-`flamekeeper update --version X`. The output is kept in `<data dir>/self-update/update.log`.
+How it works: a container can't replace itself, and FlameKeeper has no root on the host,
+so it only asks. It writes the version to `<data dir>/self-update/request`; the
+`flamekeeper-update.path` systemd unit the installer sets up notices, checks it's a real
+release newer than the installed one, and runs `flamekeeper update --version X`. The
+output is kept in `/opt/flamekeeper/self-update/update.log` (`journalctl -u
+flamekeeper-update` shows when it ran).
 
 ## Signing in
 
@@ -127,8 +136,18 @@ scheduled restarts, and anything that fails. Pick which ones you want, and use "
 FlameKeeper serves plain HTTP, so on an untrusted network bind it to `127.0.0.1`
 (`--bind 127.0.0.1`) and put it behind a reverse proxy with HTTPS (set `BASE_PATH` to
 serve it under a sub-path). Anyone signed in can control your servers and read role
-passwords. FlameKeeper also has access to the Docker socket, which is equivalent to root on
-the host; updating from the UI uses that to run `flamekeeper update` on the host.
+passwords.
+
+FlameKeeper doesn't get the Docker socket, which would be root on the host. It talks to
+Docker through a small proxy (the `flamekeeper-dockerproxy` container) that only allows what
+FlameKeeper needs: game and helper containers that aren't privileged, see only
+FlameKeeper's data folder, and publish only UDP ports. So a bug in FlameKeeper or a stolen
+sign-in can wreck your game servers, but not take over the machine. Two things need you on
+the host: updating from the UI hands a request to a systemd service (see Updating
+FlameKeeper), and importing needs `sudo flamekeeper import --allow`. If the proxy ever
+blocks something it shouldn't, set `FK_PROXY_MODE=audit` in `/opt/flamekeeper/.env` and
+run `flamekeeper restart`: it then only logs what it would have refused (`flamekeeper logs`),
+and please open an issue. Details: [docs/socket-proxy.md](docs/socket-proxy.md).
 
 ## Changing settings
 
@@ -171,6 +190,12 @@ If the scan finds the old server's game files (`enshrouded_server.exe` and the r
 wizard copies them instead of downloading about 9 GB from Steam. The copy runs while the old
 server is still up, and the new world's first start checks the files against Steam and
 downloads only what's missing or newer.
+
+FlameKeeper can't read folders or touch containers it didn't create until you allow it on
+the host. The wizard tells you the exact command, for example
+`sudo flamekeeper import --allow /srv/enshrouded` or `sudo flamekeeper import --allow
+enshrouded`; it lasts an hour (enough to scan, import and remove the old container), and
+`sudo flamekeeper import --done` withdraws it early.
 
 Scanning changes nothing. On import, a running container is stopped just before the new
 world's first start (the game saves on shutdown), and its restart policy is set to `no` so
@@ -235,7 +260,9 @@ they enter.
 backend/    FastAPI controller (Python 3.12, uv)
 frontend/   React + TypeScript + Vite UI
 installer/  install.sh, the flamekeeper CLI, and their tests
+dockerproxy/ fk-dockerproxy (Go): the Docker API proxy FlameKeeper runs behind
 docs/       game-server-behavior.md: how the game server and image behave, as FlameKeeper relies on it
+            socket-proxy.md: the Docker proxy, import grants and updates from the UI
 ```
 
 ```sh
@@ -255,6 +282,10 @@ docker run --rm -v "$PWD":/mnt koalaman/shellcheck:stable -x /mnt/installer/inst
 docker run --rm -v "$PWD":/code -w /code bats/bats:latest installer/tests
 installer/tests/e2e-clean-host.sh flamekeeper:dev   # fresh Ubuntu, installs Docker, then FlameKeeper
 installer/tests/e2e-self-update.sh                  # same, then updates from the UI to the latest release (uses the internet)
+
+# Docker proxy: tests, and a controller running through it against your Docker
+docker run --rm -v "$PWD/dockerproxy":/src -w /src golang:1.23-alpine go test ./...
+scripts/dockerproxy-e2e.sh up flamekeeper:dev $HOME/fk-proxy-data enforce   # then: logs | down
 
 # Image
 docker build -t flamekeeper:dev .

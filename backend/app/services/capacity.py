@@ -43,11 +43,14 @@ def capacity(data_dir: Path, worlds: int, extra: int = 0, *, new_downloads: int 
         warnings.append(f"{n} world{'s' if n != 1 else ''} would want {n * CORES_PER_SERVER} CPU "
                         f"cores by Keen's guidance (6 each); this host has {cpus}.")
     if usage and extra and usage.free < extra * GAME_DOWNLOAD + 5 * 1024**3:
-        warnings.append(f"Only {usage.free / 1024**3:.0f} GB free on the data disk; each new "
-                        "world needs about 10 GB for the game, plus saves and backups.")
+        warnings.append(f"Only {usage.free / 1024**3:.0f} GB free on the host disk that holds "
+                        "the data folder; each new world needs about 10 GB for the game, plus "
+                        "room for saves, backups and updates.")
     elif usage and n and usage.total < n * DISK_PER_SERVER:
-        warnings.append(f"Keen recommends 30 GB of disk per server; the data disk has "
-                        f"{usage.total / 1024**3:.0f} GB in total for {n}.")
+        warnings.append(f"The host disk that holds the data folder is "
+                        f"{usage.total / 1024**3:.0f} GB in total; Keen recommends about 30 GB "
+                        f"per server ({n * 30} GB for {n}). Worlds aren't size-limited, they use "
+                        "whatever the disk has; to get more room, grow that disk.")
     return {
         "worlds": n,
         "mem_total": mem,

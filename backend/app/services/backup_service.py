@@ -616,9 +616,9 @@ class BackupService:
             "warnings": [],
         }
         if usage.free < usage.total * 0.10:
-            out["warnings"].append("Less than 10% of the disk is free")
+            out["warnings"].append("Less than 10% of the host disk is free")
         if game and usage.free < 2 * game:
-            out["warnings"].append("Less than twice the game's size is free; game updates "
-                                   "may fail")
+            out["warnings"].append("Less than twice the game's size is free on the host disk; "
+                                   "game updates may fail. Free up space or grow the disk.")
         self._disk_cache[world.id] = (time.monotonic(), out)
         return out

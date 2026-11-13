@@ -421,6 +421,10 @@ class UpdateService:
             await self.image_info(image)
         for world in worlds:
             try:
+                self._announce(world)
+            except Exception:
+                log.exception("update_available event failed for %s", world.slug)
+            try:
                 job = await self._auto(world)
             except Exception:
                 log.exception("automatic update failed to start for %s", world.slug)
@@ -428,6 +432,21 @@ class UpdateService:
             if job:
                 started.append(job)
         return started
+
+    def _announce(self, world: World) -> None:
+        """Record `update_available` once per new build, whatever the world's policy.
+
+        The world's own timeline is the memory of what was announced, so a restart
+        doesn't announce the same build again.
+        """
+        game = self.status(world)["game"]
+        if not game["update_available"]:
+            return
+        last = self.events.recent(world.id, 1, kinds=["update_available"])
+        if last and last[0]["data"].get("build") == game["latest"]:
+            return
+        self.events.record(world.id, "update_available", build=game["latest"],
+                           policy=world.update_policy)
 
     async def _auto(self, world: World) -> str | None:
         if self.pending_job(world) or not await self._running(world):
@@ -444,8 +463,6 @@ class UpdateService:
             elif world.update_policy == "window" and self._window_due(world):
                 when = "now"
             if when:
-                self.events.record(world.id, "update_available", build=game["latest"],
-                                   policy=world.update_policy)
                 return self.update(world, when=when, auto=True)
         if image["update_available"] and world.image_update_policy == "when_empty":
             return self.update(world, target="image", when="empty", auto=True)

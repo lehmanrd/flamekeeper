@@ -21,6 +21,8 @@ LABEL_INFRA = f"{APP_SLUG}.infra"
 
 GAME_IMAGE_REPO = "mornedhels/enshrouded-server"
 GAME_MOUNT = "/opt/enshrouded"
+# Faster Wine sync (kernel 6.14+), passed to game containers when the host has it.
+NTSYNC_DEVICE = "/dev/ntsync"
 # Paths inside the game volume (see docs/game-server-behavior.md).
 GAME_SERVER_SUBDIR = "server"
 SERVER_CONFIG_NAME = "enshrouded_server.json"
@@ -45,6 +47,9 @@ class Settings(BaseSettings):
     # to the game container by name on this network when the controller runs in
     # a container; otherwise they go to a2s_host.
     docker_network: str = "flamekeeper"
+    # Local volume bound to DATA_DIR; world containers mount worlds/<slug>/game from it as
+    # a subpath, which Docker resolves without leaving the volume (docs/socket-proxy.md).
+    data_volume: str = "flamekeeper-data"
     a2s_mode: str = "auto"  # auto | network | host
     a2s_host: str = "127.0.0.1"
 
@@ -63,6 +68,8 @@ class Settings(BaseSettings):
     flamekeeper_version: str = "dev"
     flamekeeper_repo: str = "lehmanrd/flamekeeper"
     flamekeeper_cli: str = ""
+    # The host's update log and result (installer: /opt/flamekeeper/self-update, read-only).
+    host_update_dir: Path = Path("/var/lib/flamekeeper/host-update")
     check_for_app_updates: bool = True
     metrics_retention_days: int = 7
     # Skip the DATA_DIR path-match check (development only).

@@ -35,17 +35,26 @@ jobs:
       - run: npm test
       - run: npm run build
 
+  dockerproxy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: gofmt, vet, test
+        run: |
+          docker run --rm -v "$PWD/dockerproxy":/src -w /src -e GOFLAGS=-buildvcs=false golang:1.23-alpine \
+            sh -c 'test -z "$(gofmt -l .)" && go vet ./... && go test ./...'
+
   installer:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - run: docker run --rm -v "$PWD":/mnt koalaman/shellcheck:stable -x /mnt/installer/install.sh /mnt/installer/flamekeeper /mnt/installer/build.sh /mnt/installer/tests/e2e-clean-host.sh
+      - run: docker run --rm -v "$PWD":/mnt koalaman/shellcheck:stable -x /mnt/installer/install.sh /mnt/installer/flamekeeper /mnt/installer/build.sh /mnt/installer/tests/e2e-clean-host.sh /mnt/scripts/dockerproxy-e2e.sh
       - run: docker run --rm -v "$PWD":/code -w /code bats/bats:latest installer/tests
 
   image-and-install:
     # Builds the controller image, then runs the installer on a fresh Ubuntu
     # (systemd, no Docker) and checks the result.
-    needs: [backend, frontend, installer]
+    needs: [backend, frontend, dockerproxy, installer]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
