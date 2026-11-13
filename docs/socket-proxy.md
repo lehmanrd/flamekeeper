@@ -1,6 +1,6 @@
 # Docker socket proxy
 
-Status: **steps 1–4 done** (see Steps); installs run behind the proxy. This is the plan for taking the Docker socket
+Status: **steps 1–5 done** (see Steps); installs run behind the proxy. This is the plan for taking the Docker socket
 away from the FlameKeeper container.
 
 ## Why
@@ -42,13 +42,9 @@ but the range would have to be fixed when the FlameKeeper container is created.
 - The proxy (`dockerproxy/`, Go) ships in the FlameKeeper image as `/usr/local/bin/fk-dockerproxy`
   and runs as its own compose service, so its policy always matches the app version.
 - FlameKeeper gets `DOCKER_HOST=unix:///run/fk/docker.sock`; the Docker SDK picks it up.
-- The proxy service: `network_mode: none`, read-only root filesystem, and `DATA_DIR`
-  mounted **read-only** at the same path so it can check bind paths on disk. It runs as
-  root with every capability dropped except `CAP_DAC_READ_SEARCH`, so it can look up any
-  path in `DATA_DIR` whatever its permissions (FlameKeeper's import scratch folders are
-  `0700`, world folders belong to the game's user). That adds nothing real: the proxy
-  holds the Docker socket anyway. In enforce mode the proxy refuses to start if it can't
-  see `DATA_DIR`, since every bind path would otherwise look nonexistent and pass the check.
+- The proxy service: `network_mode: none`, read-only root filesystem, every capability
+  dropped, `no-new-privileges`. It needs no access to `DATA_DIR`: every rule compares
+  paths as text (see "World folders" below for why that's enough).
 - Go rather than Python: exec start upgrades the HTTP connection, and logs/pull/stats are
   long streams; `httputil.ReverseProxy` handles both. URL-only filters like
   `tecnativa/docker-socket-proxy` don't help: the escape is in the body of
@@ -75,35 +71,58 @@ Docker SDK raises a normal `APIError` with the reason.
 | `POST /exec/{id}/start`, `/exec/{id}/resize` | Allowed (the exec was checked when it was created). |
 | `POST /networks/create` | Only the `flamekeeper` network, bridge driver. |
 | `POST /networks/{id}/connect` | Only that network, only for world containers or the controller (`flamekeeper.role=controller`). |
-| `DELETE /volumes/{name}` | Only while an import grant is in effect (importer cleanup). |
+| `POST /volumes/create` | Only the data volume (`flamekeeper-data`): local, `type=none,o=bind,device=DATA_DIR`. |
+| `DELETE /volumes/{name}` | Only while an import grant is in effect (importer cleanup); never the data volume. |
 | `POST /containers/create` | One of the two shapes below. |
 | Anything else (build, plugins, swarm, secrets, attach, archive `PUT`, commit, …) | Denied. |
 
 **World container** (`flamekeeper.managed=true`, `flamekeeper.world_id` set):
-image from an allowlisted repo; in `HostConfig` only `Binds`, `PortBindings`, `RestartPolicy`,
-`Devices`, `NanoCpus`, `Memory`, `LogConfig` and `NetworkMode` may be non-empty;
-`NetworkMode` is the `flamekeeper` network (or `default`/`bridge`); devices only
-`/dev/ntsync`; ports UDP ≥ 1024; binds only from under `DATA_DIR/worlds/`.
+image from an allowlisted repo; in `HostConfig` only `Mounts`, `PortBindings`,
+`RestartPolicy`, `Devices`, `NanoCpus`, `Memory`, `LogConfig` and `NetworkMode` may be
+non-empty (no `Binds`); exactly one mount: the data volume with subpath
+`worlds/<slug>/game`, requested with API 1.45 or newer, while the volume is bound to
+`DATA_DIR`; `NetworkMode` is the `flamekeeper` network (or `default`/`bridge`); devices
+only `/dev/ntsync`; ports UDP ≥ 1024.
 
 **Helper** (`flamekeeper.managed.helper=true`): `busybox:stable` or the steamcmd image;
 `HostConfig` may only set `Binds`, `Mounts`, `Devices`, `NetworkMode`, `VolumesFrom`,
-`LogConfig`. `Binds` (writable scratch) only from under `DATA_DIR`. `Mounts` only
-read-only binds (Docker refuses a missing source instead of creating it), from under
-`DATA_DIR` or exactly a folder the import grant names. `VolumesFrom` only `:ro` and only
+`LogConfig`. `Binds` only of `DATA_DIR` itself. `Mounts` only read-only binds (Docker
+refuses a missing source instead of creating it) of `DATA_DIR` or exactly a folder the
+import grant names, which may not be in or above `DATA_DIR`. `VolumesFrom` only `:ro` and only
 for a container the import grant names. `Devices` only `/dev/ntsync`. `network_mode: host`
 only for the exact command `cat /proc/net/udp /proc/net/udp6` with no mounts.
 
 Everything else, including the current privileged self-update helper, is denied.
 
-### Bind paths and symlinks
+### World folders: volume subpaths, never binds below DATA_DIR
 
-Docker follows symlinks in a bind source, and FlameKeeper can write to `DATA_DIR`, so
-`DATA_DIR/worlds/x/game -> /` would pass a prefix check. The proxy requires a clean
-absolute path (no `..`) and `lstat`s every existing component below `DATA_DIR` in its
-read-only view, refusing any symlink. That leaves a race (swap a directory for a symlink
-between the check and Docker's mount). Phase 2 closes it: FlameKeeper runs as a non-root
-user and the per-world directories are root-owned, so it can write inside `game/` but
-can't replace it.
+FlameKeeper can write anything in `DATA_DIR`, so it can replace any folder **in** it with a
+symlink. Docker resolves a bind source when it *starts* a container, not when it creates
+it, and Docker starts containers on its own (restart policy, crashes, reboots) without
+asking the proxy. So a check at create time can't protect a bind of
+`DATA_DIR/worlds/<slug>/game`: FlameKeeper could swap `game` for a symlink to `/`
+afterwards, and the next start would mount the host's root (tested: Docker follows a
+symlink swapped in after create). Checking each path for symlinks only moves the problem.
+
+What FlameKeeper can't swap is `DATA_DIR` itself: it's the root of its mount, and it has
+no access to the parent. So nothing below `DATA_DIR` is ever a mount source:
+
+- **World containers** mount their game folder from the `flamekeeper-data` volume (a
+  local volume bound to `DATA_DIR`, created on first use) with the subpath
+  `worlds/<slug>/game`. Docker 26 (API 1.45) resolves a subpath without leaving the
+  volume and pins what it found. Tested on Docker 29: a final folder, a parent folder,
+  absolute and relative symlinks, to `/` or to folders that exist, all fail to start
+  with "path concatenation escapes the base directory", including starts Docker does by
+  itself; restoring the folder makes the container start again.
+- **Helpers** may bind `DATA_DIR` itself (they work inside it, at `/data`), never a
+  folder in it; read-only mounts are `DATA_DIR` or exactly a granted host folder outside
+  it.
+- The proxy only allows creating the data volume with exactly those options, refuses to
+  remove it, and checks that it really is bound to `DATA_DIR` before a world container
+  is created (Docker would otherwise create an empty volume by that name).
+
+This also means the proxy doesn't look at the filesystem at all: it has no `DATA_DIR`
+mount and no capabilities.
 
 ### Import grants
 
@@ -170,9 +189,9 @@ See [`installer/compose.template.yml`](../installer/compose.template.yml) (and
 who manage compose themselves). In short:
 
 - `dockerproxy` (container `flamekeeper-dockerproxy`): the host's Docker socket, the
-  shared `docker-proxy` volume at `/run/fk`, `DATA_DIR` read-only at the same path, and
-  `/opt/flamekeeper/proxy` (the import grant) read-only; no network, read-only root,
-  only `CAP_DAC_READ_SEARCH`, `no-new-privileges`. Healthy once its socket exists.
+  shared `docker-proxy` volume at `/run/fk`, and `/opt/flamekeeper/proxy` (the import
+  grant) read-only; no network, read-only root, no capabilities, `no-new-privileges`.
+  Healthy once its socket exists.
 - `flamekeeper`: no Docker socket; `DOCKER_HOST=unix:///run/fk/docker.sock`, the label
   `flamekeeper.role=controller` (so it may join the `flamekeeper` network), and it starts
   only after the proxy is healthy.
@@ -199,7 +218,8 @@ for it, and recreates the controller. Game containers keep running throughout.
    (with the old container's and volume's cleanup) under a grant, with nothing denied;
    without a grant both imports are refused. The run found that the proxy's
    unprivileged user couldn't look inside FlameKeeper's `0700` import folders, so the
-   proxy now runs as root with only `CAP_DAC_READ_SEARCH`.
+   proxy ran as root with only `CAP_DAC_READ_SEARCH` (step 5 removed the need: it now
+   has no capabilities and no `DATA_DIR` mount).
 3. **Host-side self-update** — done (code change 3 above). Unit and installer tests cover
    hostile requests (injection-shaped versions, symlinks, FIFOs, a symlinked folder,
    downgrades). `e2e-clean-host.sh` checks the unit on real systemd and that a malformed
@@ -216,7 +236,19 @@ for it, and recreates the controller. Game containers keep running throughout.
    upgrade of a real 0.6.3 install with a world to this build (proxy created and healthy
    before the controller, the world still managed, its container recreated through the
    proxy, nothing denied). Writing it also found that busybox `realpath` has no `-e`.
-5. Later: non-root FlameKeeper (closes the symlink race).
+5. **World folders as volume subpaths** — done. Planned as "run FlameKeeper as non-root to
+   close the race between the symlink check and Docker's mount", but testing showed it
+   wasn't a race: Docker resolves bind sources at every start, including its own
+   restarts, so a swapped folder was a deterministic way out for a compromised
+   FlameKeeper, and non-root wouldn't have helped (helpers run as root in `DATA_DIR`).
+   Fixed instead as described in "World folders" above; FlameKeeper now needs Docker
+   Engine 26 (installer and self-check). Existing world containers show "restart
+   required" until recreated (the infra fingerprint includes the mount). Tested on real
+   Docker through the enforcing proxy: the world lifecycle, both imports, the swap
+   attack (refused at FlameKeeper's start and at Docker's own), the old bind shape, a
+   helper bind inside `DATA_DIR` and a volume bound to `/` (all refused), and an
+   upgrade of a 0.6.3 install whose world showed "restart required" and switched to the
+   subpath when recreated.
 
 Once enforcing, a compromised FlameKeeper can only run unprivileged world and helper
-containers working on `DATA_DIR`.
+containers working on `DATA_DIR`; it can wreck the game servers, not take over the host.

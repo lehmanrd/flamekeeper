@@ -25,6 +25,18 @@ ProgressCb = Callable[[int | None, str], None]
 
 
 @dataclass
+class VolumeMount:
+    """A subpath of a named volume (Docker 26+): Docker resolves it inside the volume."""
+    volume: str
+    subpath: str
+    target: str
+
+
+# Volume subpaths need API 1.45 (Docker Engine 26).
+MIN_API = (1, 45)
+
+
+@dataclass
 class ContainerSpec:
     name: str
     image: str
@@ -33,13 +45,14 @@ class ContainerSpec:
     env: dict[str, str]
     # "15637/udp" -> (host_ip, host_port)
     ports: dict[str, tuple[str, int]]
-    # host_path -> container_path
-    binds: dict[str, str]
+    # host_path -> container_path (world containers have none: see VolumeMount)
+    binds: dict[str, str] = field(default_factory=dict)
     devices: list[str] = field(default_factory=list)
     stop_timeout: int = 90
     nano_cpus: int | None = None
     mem_limit_bytes: int | None = None
     network: str | None = None
+    volumes: list[VolumeMount] = field(default_factory=list)
 
 
 @dataclass
@@ -125,6 +138,7 @@ class DockerAdapter(Protocol):
     async def image_exists(self, image: str) -> bool: ...
     async def pull(self, image: str, progress: ProgressCb | None = None) -> None: ...
     async def ensure_network(self, name: str) -> None: ...
+    async def ensure_data_volume(self, name: str, device: Path) -> None: ...
     async def connect_network(self, network: str, name_or_id: str) -> None: ...
     async def run_helper(
         self,
@@ -283,7 +297,9 @@ class RealDockerAdapter:
             api = self.client.api
             host_config = api.create_host_config(
                 port_bindings={k: (ip, port) for k, (ip, port) in spec.ports.items()},
-                binds={h: {"bind": c, "mode": "rw"} for h, c in spec.binds.items()},
+                binds={h: {"bind": c, "mode": "rw"} for h, c in spec.binds.items()} or None,
+                mounts=[{"Type": "volume", "Source": v.volume, "Target": v.target,
+                         "VolumeOptions": {"Subpath": v.subpath}} for v in spec.volumes] or None,
                 restart_policy={"Name": "unless-stopped"},
                 devices=[f"{d}:{d}:rwm" for d in spec.devices] or None,
                 nano_cpus=spec.nano_cpus,
@@ -515,6 +531,25 @@ class RealDockerAdapter:
             # compose project's "flamekeeper_default". Only an exact match counts.
             if not any(n.name == name for n in self.client.networks.list(names=[name])):
                 self.client.networks.create(name, driver="bridge", labels={LABEL_MANAGED: "true"})
+
+        await self._run(_do)
+
+    async def ensure_data_volume(self, name: str, device: Path) -> None:
+        """The local volume bound to `device` (DATA_DIR). One by that name that's bound
+        elsewhere is an error: Docker would mount it as the worlds' game folders."""
+        opts = {"type": "none", "o": "bind", "device": str(device)}
+
+        def _do() -> None:
+            try:
+                v = self.client.volumes.get(name)
+            except self._docker.errors.NotFound:
+                self.client.volumes.create(name, driver="local", driver_opts=opts,
+                                           labels={LABEL_MANAGED: "true"})
+                return
+            if ((v.attrs.get("Driver") or "local") != "local"
+                    or (v.attrs.get("Options") or {}) != opts):
+                raise DockerError(f"The Docker volume {name} exists but isn't bound to "
+                                  f"{device}. Remove it: docker volume rm {name}")
 
         await self._run(_do)
 

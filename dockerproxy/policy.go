@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
-	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -35,11 +35,21 @@ type containerInfo struct {
 	Labels map[string]string
 }
 
+type volumeInfo struct {
+	Driver  string
+	Options map[string]string
+}
+
 // Inspector looks things up on the real Docker daemon.
 type Inspector interface {
 	Container(ctx context.Context, ref string) (containerInfo, error)
 	NetworkName(ctx context.Context, id string) (string, error)
+	Volume(ctx context.Context, name string) (volumeInfo, error)
 }
+
+// Docker 26 (API 1.45) added volume subpaths; older daemons would ignore the subpath
+// and mount the whole volume.
+var minSubpathAPI = [2]int{1, 45}
 
 type Decision struct {
 	Allow  bool
@@ -64,10 +74,24 @@ func NewPolicy(cfg Config, insp Inspector) *Policy {
 }
 
 var versionPrefix = regexp.MustCompile(`^/v[0-9]+(\.[0-9]+)*/`)
+var versionParts = regexp.MustCompile(`^/v([0-9]+)\.([0-9]+)/`)
+
+// apiAtLeast: the request's API version (from its /vX.Y prefix; none = the daemon's own,
+// the newest) is at least min.
+func apiAtLeast(path string, min [2]int) bool {
+	m := versionParts.FindStringSubmatch(path)
+	if m == nil {
+		return !versionPrefix.MatchString(path)
+	}
+	major, _ := strconv.Atoi(m[1])
+	minor, _ := strconv.Atoi(m[2])
+	return major > min[0] || (major == min[0] && minor >= min[1])
+}
 
 // Decide checks one Docker API request. body is only read for the requests whose
 // body matters (see needsBody).
 func (p *Policy) Decide(ctx context.Context, method, path string, q url.Values, body []byte) Decision {
+	subpathAPI := apiAtLeast(path, minSubpathAPI)
 	path = versionPrefix.ReplaceAllString(path, "/")
 	seg := strings.Split(strings.Trim(path, "/"), "/")
 	read := method == "GET" || method == "HEAD"
@@ -79,7 +103,7 @@ func (p *Policy) Decide(ctx context.Context, method, path string, q url.Values, 
 			return allow("read")
 		}
 	case "containers":
-		return p.containers(ctx, method, seg, body)
+		return p.containers(ctx, method, seg, body, subpathAPI)
 	case "images":
 		if read && seg[n-1] == "json" {
 			return allow("read")
@@ -105,7 +129,13 @@ func (p *Policy) Decide(ctx context.Context, method, path string, q url.Values, 
 		if read {
 			return allow("read")
 		}
+		if method == "POST" && n == 2 && seg[1] == "create" {
+			return p.volumeCreate(body)
+		}
 		if method == "DELETE" && n == 2 {
+			if seg[1] == p.cfg.DataVolume {
+				return deny("volume-remove", "the data volume %q is never removed", p.cfg.DataVolume)
+			}
 			if p.grant() != nil {
 				return allow("import-volume-remove")
 			}
@@ -122,14 +152,14 @@ func (p *Policy) Decide(ctx context.Context, method, path string, q url.Values, 
 	return deny("default", "%s %s isn't something FlameKeeper needs", method, path)
 }
 
-func (p *Policy) containers(ctx context.Context, method string, seg []string, body []byte) Decision {
+func (p *Policy) containers(ctx context.Context, method string, seg []string, body []byte, subpathAPI bool) Decision {
 	n := len(seg)
 	read := method == "GET" || method == "HEAD"
 	switch {
 	case n == 2 && seg[1] == "json" && read:
 		return allow("read")
 	case n == 2 && seg[1] == "create" && method == "POST":
-		return p.create(ctx, body)
+		return p.create(ctx, body, subpathAPI)
 	case n == 3 && seg[2] == "json" && read:
 		return allow("read")
 	case n == 2 && method == "DELETE":
@@ -267,7 +297,7 @@ type createBody struct {
 	}
 }
 
-func (p *Policy) create(ctx context.Context, body []byte) Decision {
+func (p *Policy) create(ctx context.Context, body []byte, subpathAPI bool) Decision {
 	var c createBody
 	if err := json.Unmarshal(body, &c); err != nil {
 		return deny("create", "bad create body: %v", err)
@@ -276,7 +306,7 @@ func (p *Policy) create(ctx context.Context, body []byte) Decision {
 	case c.Labels[labelHelper] == "true":
 		return p.createHelper(ctx, &c)
 	case c.Labels[labelManaged] == "true":
-		return p.createWorld(&c)
+		return p.createWorld(ctx, &c, subpathAPI)
 	case c.Labels[labelRole] == "self-update":
 		return deny("create-self-update", "the privileged self-update helper isn't allowed (replaced by the host-side update)")
 	}
@@ -284,7 +314,7 @@ func (p *Policy) create(ctx context.Context, body []byte) Decision {
 		labelManaged, labelHelper)
 }
 
-func (p *Policy) createWorld(c *createBody) Decision {
+func (p *Policy) createWorld(ctx context.Context, c *createBody, subpathAPI bool) Decision {
 	const rule = "create-world"
 	if !p.gameImageAllowed(c.Image) {
 		return deny(rule, "image %q isn't an allowed game image", c.Image)
@@ -293,7 +323,9 @@ func (p *Policy) createWorld(c *createBody) Decision {
 		return deny(rule, "missing %s label", labelWorldID)
 	}
 	hc := c.HostConfig
-	if d := onlyHostConfig(rule, hc, "Binds", "PortBindings", "RestartPolicy", "Devices",
+	// No Binds: a bind source below DATA_DIR could be swapped for a symlink by
+	// FlameKeeper, and Docker follows it on every (re)start. See worldMount.
+	if d := onlyHostConfig(rule, hc, "Mounts", "PortBindings", "RestartPolicy", "Devices",
 		"NanoCpus", "Memory", "LogConfig", "NetworkMode"); !d.Allow {
 		return d
 	}
@@ -303,19 +335,8 @@ func (p *Policy) createWorld(c *createBody) Decision {
 	if d := p.endpoints(rule, c, p.cfg.Network); !d.Allow {
 		return d
 	}
-	var binds []string
-	if err := unmarshalOpt(hc["Binds"], &binds); err != nil {
-		return deny(rule, "bad Binds: %v", err)
-	}
-	worlds := filepath.Join(p.cfg.DataDir, "worlds")
-	for _, b := range binds {
-		src, _, err := parseBind(b)
-		if err != nil {
-			return deny(rule, "%v", err)
-		}
-		if err := p.checkPath(src, worlds); err != nil {
-			return deny(rule, "bind %q: %v", b, err)
-		}
+	if d := p.worldMount(ctx, rule, hc["Mounts"], subpathAPI); !d.Allow {
+		return d
 	}
 	if d := devicesOnly(rule, hc, ntsyncDevice); !d.Allow {
 		return d
@@ -386,18 +407,20 @@ func (p *Policy) createHelper(ctx context.Context, c *createBody) Decision {
 		return deny(rule, "network mode %q isn't allowed", mode)
 	}
 
-	// Writable binds: only DATA_DIR (scratch and staging folders).
+	// Binds: only DATA_DIR itself, which FlameKeeper can't swap (it's the root of its
+	// mount; it has no access to the parent). Never a folder inside it: FlameKeeper could
+	// replace that with a symlink between this check and Docker's mount.
 	for _, b := range binds {
 		src, _, err := parseBind(b)
 		if err != nil {
 			return deny(rule, "%v", err)
 		}
-		if err := p.checkPath(src, p.cfg.DataDir); err != nil {
-			return deny(rule, "bind %q: %v", b, err)
+		if src != p.cfg.DataDir {
+			return deny(rule, "bind %q: helpers may bind only DATA_DIR (%s) itself", b, p.cfg.DataDir)
 		}
 	}
-	// Host folders: read-only mounts (Docker doesn't create a missing source), from
-	// DATA_DIR or a folder the import grant names.
+	// Host folders: read-only mounts (Docker doesn't create a missing source) of DATA_DIR
+	// or exactly a folder the import grant names.
 	g := p.grant()
 	granted := false // a grant was needed: logged as import-create-helper
 	for _, m := range mounts {
@@ -457,8 +480,11 @@ func (p *Policy) helperMount(rule string, m map[string]json.RawMessage, g *impor
 	if !filepath.IsAbs(mt.Source) || filepath.Clean(mt.Source) != mt.Source {
 		return deny(rule, "mount of %q: the source must be a clean absolute path", mt.Source)
 	}
-	if err := p.checkPath(mt.Source, p.cfg.DataDir); err == nil {
+	if mt.Source == p.cfg.DataDir {
 		return allow(rule)
+	}
+	if isUnder(mt.Source, p.cfg.DataDir) || isUnder(p.cfg.DataDir, mt.Source) {
+		return deny(rule, "mount of %q: only DATA_DIR itself, not a folder in it or above it", mt.Source)
 	}
 	if f, bad := forbiddenHostPath(mt.Source); bad {
 		return deny(rule, "mount of %q: %s and the folders around it are never mounted", mt.Source, f)
@@ -529,39 +555,94 @@ func parseBind(b string) (src string, ro bool, err error) {
 	return parts[0], ro, nil
 }
 
-// checkPath requires src to be a clean absolute path at or under root (itself at or
-// under DATA_DIR), with no symlink in any existing component below DATA_DIR. Docker
-// follows symlinks in bind sources, and FlameKeeper can write to DATA_DIR.
-func (p *Policy) checkPath(src, root string) error {
-	if !filepath.IsAbs(src) {
-		return errors.New("named volumes aren't allowed")
+// isUnder: path is strictly inside dir.
+func isUnder(path, dir string) bool {
+	return strings.HasPrefix(path, strings.TrimSuffix(dir, "/")+"/")
+}
+
+// worldMount allows exactly one mount: the data volume (a local volume bound to DATA_DIR)
+// with a subpath worlds/<slug>/game. Docker resolves a subpath without leaving the volume
+// and pins it, so swapping a folder on the way for a symlink makes the start fail instead
+// of mounting something else (tested on Docker 29: absolute, relative and parent-folder
+// symlinks are all refused with "path concatenation escapes the base directory").
+func (p *Policy) worldMount(ctx context.Context, rule string, raw json.RawMessage, subpathAPI bool) Decision {
+	var mounts []map[string]json.RawMessage
+	if err := unmarshalOpt(raw, &mounts); err != nil {
+		return deny(rule, "bad Mounts: %v", err)
 	}
-	if filepath.Clean(src) != src {
-		return errors.New("path isn't clean")
+	if len(mounts) != 1 {
+		return deny(rule, "a world container mounts exactly one thing: its game folder from the %q volume", p.cfg.DataVolume)
 	}
-	rel, err := filepath.Rel(root, src)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
-		return fmt.Errorf("outside %s", root)
-	}
-	under, _ := filepath.Rel(p.cfg.DataDir, src)
-	cur := p.cfg.DataDir
-	for _, part := range strings.Split(under, "/") {
-		if part == "." {
-			break
-		}
-		cur = filepath.Join(cur, part)
-		fi, err := os.Lstat(cur)
-		if errors.Is(err, os.ErrNotExist) {
-			return nil // Docker creates the rest
-		}
-		if err != nil {
-			return fmt.Errorf("couldn't check %s: %v", cur, err)
-		}
-		if fi.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("%s is a symlink", cur)
+	m := mounts[0]
+	for k, v := range m {
+		if !slices.Contains([]string{"Type", "Source", "Target", "ReadOnly", "VolumeOptions"}, k) && !isZeroJSON(v) {
+			return deny(rule, "mount option %s isn't allowed", k)
 		}
 	}
-	return nil
+	var mt struct {
+		Type, Source, Target string
+		VolumeOptions        map[string]json.RawMessage
+	}
+	b, _ := json.Marshal(m)
+	if err := json.Unmarshal(b, &mt); err != nil {
+		return deny(rule, "bad mount: %v", err)
+	}
+	if mt.Type != "volume" || mt.Source != p.cfg.DataVolume {
+		return deny(rule, "the game folder must come from the %q volume", p.cfg.DataVolume)
+	}
+	for k, v := range mt.VolumeOptions {
+		if k != "Subpath" && k != "NoCopy" && !isZeroJSON(v) {
+			return deny(rule, "volume option %s isn't allowed", k)
+		}
+	}
+	if sub := str(mt.VolumeOptions["Subpath"]); !worldSubpath.MatchString(sub) {
+		return deny(rule, "subpath %q: must be worlds/<slug>/game", sub)
+	}
+	if !subpathAPI {
+		return deny(rule, "volume subpaths need Docker API 1.45 (Docker Engine 26) or newer")
+	}
+	// The volume must really be DATA_DIR: Docker would quietly create an empty one on
+	// first use, and nothing else may be mounted under that name.
+	v, err := p.insp.Volume(ctx, p.cfg.DataVolume)
+	if errors.Is(err, errNotFound) {
+		return deny(rule, "the %q volume doesn't exist yet", p.cfg.DataVolume)
+	}
+	if err != nil {
+		return deny(rule, "couldn't inspect the %q volume: %v", p.cfg.DataVolume, err)
+	}
+	if !p.isDataVolume(v) {
+		return deny(rule, "the %q volume isn't bound to %s", p.cfg.DataVolume, p.cfg.DataDir)
+	}
+	return allow(rule)
+}
+
+var worldSubpath = regexp.MustCompile(`^worlds/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?/game$`)
+
+func (p *Policy) dataVolumeOptions() map[string]string {
+	return map[string]string{"type": "none", "o": "bind", "device": p.cfg.DataDir}
+}
+
+func (p *Policy) isDataVolume(v volumeInfo) bool {
+	return (v.Driver == "local" || v.Driver == "") && maps.Equal(v.Options, p.dataVolumeOptions())
+}
+
+// volumeCreate allows only the data volume, bound to DATA_DIR.
+func (p *Policy) volumeCreate(body []byte) Decision {
+	const rule = "volume-create"
+	if d := onlyKeys(body, rule, "Name", "Driver", "DriverOpts", "Labels"); !d.Allow {
+		return d
+	}
+	var v struct {
+		Name, Driver string
+		DriverOpts   map[string]string
+	}
+	if err := json.Unmarshal(body, &v); err != nil {
+		return deny(rule, "bad body: %v", err)
+	}
+	if v.Name != p.cfg.DataVolume || !p.isDataVolume(volumeInfo{Driver: v.Driver, Options: v.DriverOpts}) {
+		return deny(rule, "only the %q volume, bound to %s, may be created", p.cfg.DataVolume, p.cfg.DataDir)
+	}
+	return allow(rule)
 }
 
 // -- JSON helpers -------------------------------------------------------------------------

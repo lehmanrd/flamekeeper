@@ -27,12 +27,6 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	if err := cfg.CheckDataDir(); err != nil {
-		if cfg.Mode == ModeEnforce {
-			return err
-		}
-		log.Warn("bind paths can't be checked", "error", err.Error())
-	}
 
 	upstream := unixTransport(cfg.Upstream)
 	insp := dockerInspector{client: &http.Client{Transport: upstream, Timeout: 10 * time.Second}}

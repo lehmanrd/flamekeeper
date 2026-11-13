@@ -63,6 +63,17 @@ func (d dockerInspector) Container(ctx context.Context, ref string) (containerIn
 	return containerInfo{ID: c.ID, Name: strings.TrimPrefix(c.Name, "/"), Labels: labels}, nil
 }
 
+func (d dockerInspector) Volume(ctx context.Context, name string) (volumeInfo, error) {
+	var v struct {
+		Driver  string
+		Options map[string]string
+	}
+	if err := d.get(ctx, "/volumes/"+url.PathEscape(name), &v); err != nil {
+		return volumeInfo{}, err
+	}
+	return volumeInfo{Driver: v.Driver, Options: v.Options}, nil
+}
+
 func (d dockerInspector) NetworkName(ctx context.Context, id string) (string, error) {
 	var n struct{ Name string }
 	if err := d.get(ctx, "/networks/"+url.PathEscape(id), &n); err != nil {
@@ -102,7 +113,7 @@ func needsBody(method, path string) bool {
 		return false
 	}
 	p := versionPrefix.ReplaceAllString(path, "/")
-	return p == "/containers/create" || p == "/networks/create" ||
+	return p == "/containers/create" || p == "/networks/create" || p == "/volumes/create" ||
 		strings.HasSuffix(p, "/exec") || strings.HasSuffix(p, "/update") ||
 		(strings.HasPrefix(p, "/networks/") && strings.HasSuffix(p, "/connect"))
 }

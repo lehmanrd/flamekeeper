@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
-from app.services.docker_adapter import ContainerSpec, RealDockerAdapter
+from app.services.docker_adapter import ContainerSpec, RealDockerAdapter, VolumeMount
 from app.services.docker_fake import FakeDockerAdapter
 from app.services.selfcheck import run_selfcheck
 from tests.conftest import wait_for, wait_job
@@ -53,7 +53,12 @@ def test_create_world_writes_config_and_container(
     assert spec.labels["flamekeeper.managed"] == "true"
     assert spec.labels["flamekeeper.world_id"] == world["id"]
     assert spec.ports == {"15637/udp": ("0.0.0.0", 15637)}
-    assert spec.binds == {str(settings.worlds_dir / "embervale" / "game"): "/opt/enshrouded"}
+    # The game folder is a subpath of the data volume, never a bind: a bind of a folder
+    # in DATA_DIR could be swapped for a symlink (docs/socket-proxy.md).
+    assert spec.binds == {}
+    assert spec.volumes == [VolumeMount("flamekeeper-data", "worlds/embervale/game",
+                                        "/opt/enshrouded")]
+    assert fake_docker.data_volumes == {"flamekeeper-data": settings.data_dir}
     assert spec.env["SERVER_QUERYPORT"] == "15637"
     # These would make the image overwrite our JSON on every container start.
     for key in ("SERVER_NAME", "SERVER_SLOT_COUNT", "SERVER_PASSWORD", "UPDATE_CRON",
@@ -300,3 +305,17 @@ def test_ntsync_check_asks_for_the_device(settings: Settings, present: bool) -> 
     assert result.ntsync_available is present
     run = next(r for r in fake.helper_runs if r["devices"])
     assert run["devices"] == ["/dev/ntsync"] and not run["binds"] and not run["ro_mounts"]
+
+
+def test_selfcheck_needs_docker_26(settings: Settings) -> None:
+    """Volume subpaths, which keep world folders from being swapped, need API 1.45."""
+    fake = FakeDockerAdapter()
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+
+    async def old_docker() -> dict:
+        return {"Version": "25.0.5", "ApiVersion": "1.44"}
+
+    fake.ping = old_docker  # type: ignore[method-assign]
+    result = asyncio.run(run_selfcheck(settings, fake))
+    check = next(c for c in result.checks if c.id == "docker")
+    assert check.status == "fail" and check.fatal and "Docker Engine 26" in check.detail

@@ -1,4 +1,4 @@
-# FlameKeeper: Enshrouded dedicated server manager.
+# FlameKeeper: Enshrouded dedicated server manager. Needs Docker Engine 26 or newer.
 # The one-line installer (installer/install.sh) writes an equivalent file to
 # /opt/flamekeeper/docker-compose.yml; use this one if you manage compose yourself.
 # Updating from the web UI needs the installer; here, pull the new image and `up -d`.
@@ -14,12 +14,10 @@ services:
     network_mode: none
     read_only: true
     cap_drop: [ALL]
-    cap_add: [DAC_READ_SEARCH]
     security_opt: [no-new-privileges]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - docker-proxy:/run/fk
-      - /srv/flamekeeper:/srv/flamekeeper:ro
       # Importing from a folder or container FlameKeeper didn't create: write
       # {"until": <unix time>, "paths": ["/srv/old-server"], "containers": ["old"]}
       # to ./proxy/import.json for as long as the import takes.

@@ -6,7 +6,8 @@
   "sh",
   "-c",
   "cp",
-  "/host/srv/old-server/savegame"
+  "/host/srv/old-server/savegame",
+  "/data/imports/abc/.stage-1"
  ],
  "Domainname": null,
  "Entrypoint": null,
@@ -15,7 +16,7 @@
  "Healthcheck": null,
  "HostConfig": {
   "Binds": [
-   "/DATA/imports/abc/.stage-1:/out:rw"
+   "/DATA:/data:rw"
   ],
   "Mounts": [
    {
@@ -43,7 +44,7 @@
  "Tty": false,
  "User": null,
  "Volumes": {
-  "/out": {}
+  "/data": {}
  },
  "WorkingDir": null
 }

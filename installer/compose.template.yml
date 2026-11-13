@@ -13,12 +13,10 @@ services:
     network_mode: none
     read_only: true
     cap_drop: [ALL]
-    cap_add: [DAC_READ_SEARCH]  # to check bind paths in DATA_DIR, whoever owns them
     security_opt: [no-new-privileges]
     volumes:
       - ${DOCKER_SOCK}:/var/run/docker.sock
       - docker-proxy:/run/fk
-      - ${DATA_DIR}:${DATA_DIR}:ro
       - __FK_INSTALL_DIR__/proxy:/var/lib/fk-dockerproxy:ro
     environment:
       - DATA_DIR=${DATA_DIR}

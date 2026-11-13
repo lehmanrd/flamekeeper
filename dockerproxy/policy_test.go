@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -17,6 +18,14 @@ import (
 type fakeInspector struct {
 	containers map[string]map[string]string
 	networks   map[string]string
+	volumes    map[string]volumeInfo
+}
+
+func (f fakeInspector) Volume(_ context.Context, name string) (volumeInfo, error) {
+	if v, ok := f.volumes[name]; ok {
+		return v, nil
+	}
+	return volumeInfo{}, errNotFound
 }
 
 func (f fakeInspector) Container(_ context.Context, ref string) (containerInfo, error) {
@@ -47,6 +56,7 @@ func newTestPolicy(t *testing.T) (*Policy, string) {
 	}
 	cfg := Config{
 		Mode: ModeEnforce, DataDir: data, StateDir: state, Network: "flamekeeper",
+		DataVolume:   "flamekeeper-data",
 		GameRepos:    []string{"mornedhels/enshrouded-server"},
 		HelperImages: []string{"busybox:stable", "steamcmd/steamcmd:latest"},
 	}
@@ -59,6 +69,8 @@ func newTestPolicy(t *testing.T) (*Policy, string) {
 			"other-server":          {},
 		},
 		networks: map[string]string{"net1": "flamekeeper", "net2": "bridge"},
+		volumes: map[string]volumeInfo{"flamekeeper-data": {Driver: "local",
+			Options: map[string]string{"type": "none", "o": "bind", "device": data}}},
 	}
 	return NewPolicy(cfg, insp), data
 }
@@ -117,9 +129,45 @@ func expect(t *testing.T, d Decision, allowed bool, contains string) {
 func TestCreateWorld(t *testing.T) {
 	p, data := newTestPolicy(t)
 	body := fixture(t, "world", data)
-	create := func(b []byte) Decision { return decide(p, "POST", "/v1.47/containers/create", "name=x", b) }
+	create := func(b []byte) Decision { return decide(p, "POST", "/v1.45/containers/create", "name=x", b) }
 
 	expect(t, create(body), true, "")
+	// The old shape (a bind of worlds/<slug>/game) can be swapped for a symlink.
+	expect(t, create(fixture(t, "world_bind", data)), false, "Binds")
+	expect(t, decide(p, "POST", "/v1.44/containers/create", "", body), false, "API 1.45")
+	expect(t, decide(p, "POST", "/containers/create", "", body), true, "")
+	mount := func(f func(mt map[string]any)) []byte {
+		return edit(t, body, func(m map[string]any) { f(hostConfig(m)["Mounts"].([]any)[0].(map[string]any)) })
+	}
+	sub := func(s string) func(map[string]any) {
+		return func(mt map[string]any) { mt["VolumeOptions"] = map[string]any{"Subpath": s} }
+	}
+	for _, bad := range []string{"", "worlds/embervale", "worlds/../game", "worlds/embervale/game/..",
+		"/worlds/embervale/game", "worlds/Embervale/game", "imports/x/game", "worlds/a/b/game"} {
+		expect(t, create(mount(sub(bad))), false, "subpath")
+	}
+	expect(t, create(mount(func(mt map[string]any) { mt["Source"] = "other" })), false, "volume")
+	expect(t, create(mount(func(mt map[string]any) { mt["Type"] = "bind"; mt["Source"] = data })), false, "volume")
+	expect(t, create(mount(func(mt map[string]any) {
+		mt["VolumeOptions"] = map[string]any{"Subpath": "worlds/embervale/game",
+			"DriverConfig": map[string]any{"Name": "local", "Options": map[string]any{"device": "/"}}}
+	})), false, "DriverConfig")
+	expect(t, create(edit(t, body, func(m map[string]any) {
+		hc := hostConfig(m)
+		hc["Mounts"] = append(hc["Mounts"].([]any), map[string]any{"Type": "volume", "Source": "flamekeeper-data", "Target": "/x"})
+	})), false, "exactly one")
+	expect(t, create(edit(t, body, func(m map[string]any) { delete(hostConfig(m), "Mounts") })), false, "exactly one")
+
+	// The volume must exist and be DATA_DIR (Docker would create an empty one by that name).
+	insp := p.insp.(fakeInspector)
+	good := insp.volumes["flamekeeper-data"]
+	insp.volumes["flamekeeper-data"] = volumeInfo{Driver: "local", Options: map[string]string{"type": "none", "o": "bind", "device": "/"}}
+	expect(t, create(body), false, "isn't bound")
+	insp.volumes["flamekeeper-data"] = volumeInfo{Driver: "local"}
+	expect(t, create(body), false, "isn't bound")
+	delete(insp.volumes, "flamekeeper-data")
+	expect(t, create(body), false, "doesn't exist")
+	insp.volumes["flamekeeper-data"] = good
 
 	cases := []struct {
 		name, reason string
@@ -129,20 +177,12 @@ func TestCreateWorld(t *testing.T) {
 		{"cap add", "CapAdd", func(m map[string]any) { hostConfig(m)["CapAdd"] = []string{"SYS_ADMIN"} }},
 		{"pid host", "PidMode", func(m map[string]any) { hostConfig(m)["PidMode"] = "host" }},
 		{"security opt", "SecurityOpt", func(m map[string]any) { hostConfig(m)["SecurityOpt"] = []string{"seccomp=unconfined"} }},
-		{"mounts", "Mounts", func(m map[string]any) { hostConfig(m)["Mounts"] = []any{map[string]any{"Type": "bind", "Source": "/"}} }},
+		{"mounts", "volume", func(m map[string]any) { hostConfig(m)["Mounts"] = []any{map[string]any{"Type": "bind", "Source": "/"}} }},
 		{"host network", "network mode", func(m map[string]any) { hostConfig(m)["NetworkMode"] = "host" }},
 		{"container network", "network mode", func(m map[string]any) { hostConfig(m)["NetworkMode"] = "container:x" }},
 		{"other image", "game image", func(m map[string]any) { m["Image"] = "alpine:latest" }},
 		{"no world id", "world_id", func(m map[string]any) { delete(m["Labels"].(map[string]any), labelWorldID) }},
-		{"bind root", "outside", func(m map[string]any) { hostConfig(m)["Binds"] = []string{"/:/host"} }},
-		{"bind data dir", "outside", func(m map[string]any) { hostConfig(m)["Binds"] = []string{data + ":/d"} }},
-		{"bind dotdot", "clean", func(m map[string]any) {
-			hostConfig(m)["Binds"] = []string{data + "/worlds/../../etc:/d"}
-		}},
-		{"named volume", "named volumes", func(m map[string]any) { hostConfig(m)["Binds"] = []string{"other:/d"} }},
-		{"propagation", "option", func(m map[string]any) {
-			hostConfig(m)["Binds"] = []string{data + "/worlds/embervale/game:/d:rshared"}
-		}},
+		{"a bind as well", "Binds", func(m map[string]any) { hostConfig(m)["Binds"] = []string{"/:/host"} }},
 		{"other device", "device", func(m map[string]any) {
 			hostConfig(m)["Devices"] = []any{map[string]any{"PathOnHost": "/dev/sda", "PathInContainer": "/dev/sda", "CgroupPermissions": "rwm"}}
 		}},
@@ -167,37 +207,25 @@ func TestCreateWorld(t *testing.T) {
 			hc["Privileged"] = false
 			hc["CapAdd"] = nil
 			hc["PidMode"] = ""
-			hc["Mounts"] = []any{}
+			hc["Binds"] = []any{}
 		})
 		expect(t, create(b), true, "")
 	})
 }
 
-func TestBindSymlinks(t *testing.T) {
+func TestVolumeCreateAndRemove(t *testing.T) {
 	p, data := newTestPolicy(t)
-	body := fixture(t, "world", data)
-	create := func(b []byte) Decision { return decide(p, "POST", "/containers/create", "", b) }
-
-	// a symlink anywhere under DATA_DIR on the bind path
-	if err := os.Symlink("/", filepath.Join(data, "worlds", "evil")); err != nil {
-		t.Fatal(err)
+	vol := func(name, device string) []byte {
+		return []byte(fmt.Sprintf(`{"Name": %q, "Driver": "local", "DriverOpts": {"type": "none", "o": "bind", "device": %q}, "Labels": {"flamekeeper.managed": "true"}}`, name, device))
 	}
-	b := edit(t, body, func(m map[string]any) { hostConfig(m)["Binds"] = []string{data + "/worlds/evil:/d"} })
-	expect(t, create(b), false, "symlink")
-	b = edit(t, body, func(m map[string]any) { hostConfig(m)["Binds"] = []string{data + "/worlds/evil/etc:/d"} })
-	expect(t, create(b), false, "symlink")
-
-	if err := os.Rename(filepath.Join(data, "worlds", "embervale", "game"), filepath.Join(data, "worlds", "embervale", "real")); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink("real", filepath.Join(data, "worlds", "embervale", "game")); err != nil {
-		t.Fatal(err)
-	}
-	expect(t, create(body), false, "symlink")
-
-	// a world folder that doesn't exist yet: Docker creates it
-	b = edit(t, body, func(m map[string]any) { hostConfig(m)["Binds"] = []string{data + "/worlds/new/game:/d"} })
-	expect(t, create(b), true, "")
+	expect(t, decide(p, "POST", "/volumes/create", "", vol("flamekeeper-data", data)), true, "")
+	expect(t, decide(p, "POST", "/volumes/create", "", vol("flamekeeper-data", "/")), false, "only")
+	expect(t, decide(p, "POST", "/volumes/create", "", vol("flamekeeper-data", data+"/worlds")), false, "only")
+	expect(t, decide(p, "POST", "/volumes/create", "", vol("other", data)), false, "only")
+	expect(t, decide(p, "POST", "/volumes/create", "", []byte(`{"Name": "flamekeeper-data"}`)), false, "only")
+	grantImport(t, p)
+	expect(t, decide(p, "DELETE", "/volumes/flamekeeper-data", "", nil), false, "never removed")
+	expect(t, decide(p, "DELETE", "/volumes/old-data", "", nil), true, "")
 }
 
 func TestCreateHelper(t *testing.T) {
@@ -210,8 +238,8 @@ func TestCreateHelper(t *testing.T) {
 	expect(t, create(fixture(t, "helper_ntsync", data)), true, "")
 
 	// the shapes step 2 removed stay refused
-	expect(t, create(fixture(t, "helper_dev", data)), false, "outside")
-	expect(t, create(fixture(t, "helper_hostroot", data)), false, "outside")
+	expect(t, create(fixture(t, "helper_dev", data)), false, "only DATA_DIR")
+	expect(t, create(fixture(t, "helper_hostroot", data)), false, "only DATA_DIR")
 	expect(t, create(fixture(t, "helper_volumes_from", data)), false, ":ro")
 
 	// import helpers need a grant
@@ -248,8 +276,8 @@ func TestCreateHelper(t *testing.T) {
 			hostConfig(m)["VolumesFrom"] = []string{"flamekeeper-embervale:ro"}
 		})), false, "import grant")
 		expect(t, create(fixture(t, "helper_volumes_from", data)), false, ":ro")
-		expect(t, create(fixture(t, "helper_dev", data)), false, "outside")
-		expect(t, create(fixture(t, "helper_hostroot", data)), false, "outside")
+		expect(t, create(fixture(t, "helper_dev", data)), false, "only DATA_DIR")
+		expect(t, create(fixture(t, "helper_hostroot", data)), false, "only DATA_DIR")
 	})
 }
 
@@ -267,9 +295,13 @@ func TestHelperMounts(t *testing.T) {
 	src := func(s string) func(map[string]any) { return func(mt map[string]any) { mt["Source"] = s } }
 
 	expect(t, mount(func(map[string]any) {}), true, "")
-	expect(t, mount(src(data+"/imports/abc")), true, "") // DATA_DIR needs no grant
+	expect(t, mount(src(data)), true, "") // DATA_DIR itself needs no grant
+	// A folder in DATA_DIR could be swapped for a symlink; one above it holds DATA_DIR.
+	expect(t, mount(src(data+"/imports/abc")), false, "not a folder in it")
+	expect(t, mount(src(filepath.Dir(data))), false, "not a folder in it")
 	// granted, but these hold sockets or contain folders that do
-	for _, s := range []string{"/", "/var", "/run/user/1000/srv"} {
+	expect(t, mount(src("/")), false, "above it") // also holds DATA_DIR
+	for _, s := range []string{"/var", "/run/user/1000/srv"} {
 		expect(t, mount(src(s)), false, "never mounted")
 	}
 	// only the granted folder itself: a subfolder could be a symlink on the host
@@ -287,11 +319,17 @@ func TestHelperMounts(t *testing.T) {
 		mt["VolumeOptions"] = map[string]any{"DriverConfig": map[string]any{"Name": "local"}}
 	}), false, "VolumeOptions")
 
-	// a symlink in DATA_DIR doesn't get through either
-	if err := os.Symlink("/run", filepath.Join(data, "evil")); err != nil {
-		t.Fatal(err)
+	// Writable binds: DATA_DIR itself only.
+	bind := func(b string) Decision {
+		return decide(p, "POST", "/containers/create", "", edit(t, body, func(m map[string]any) {
+			hostConfig(m)["Binds"] = []string{b}
+		}))
 	}
-	expect(t, mount(src(data+"/evil")), false, "")
+	expect(t, bind(data+":/data"), true, "")
+	expect(t, bind(data+":/data:ro"), true, "")
+	expect(t, bind(data+"/imports/abc:/out"), false, "only DATA_DIR")
+	expect(t, bind(data+"/:/data"), false, "only DATA_DIR")
+	expect(t, bind(filepath.Dir(data)+":/up"), false, "only DATA_DIR")
 }
 
 func TestCreateOther(t *testing.T) {

@@ -31,7 +31,9 @@ What the installer does, in order:
 
 1. Checks the machine: Linux, x86-64 (the Enshrouded server is x86-64 only), systemd.
 2. Installs Docker if it's missing (it asks first), using Docker's official script or
-   your distro's packages, and the `docker compose` plugin.
+   your distro's packages, and the `docker compose` plugin. FlameKeeper needs Docker
+   Engine 26 or newer (some distributions' own packages, like Debian 12's `docker.io`,
+   are older; the installer tells you).
 3. Warns (but doesn't stop) if the machine is below Keen's guidance per server:
    16 GB RAM, 6 CPU cores, 30 GB disk.
 4. Writes `/opt/flamekeeper/docker-compose.yml` and `.env`, creates `/srv/flamekeeper`.

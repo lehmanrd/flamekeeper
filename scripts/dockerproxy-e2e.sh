@@ -20,11 +20,9 @@ case "${1:-}" in
     mkdir -p "$data" "$data-proxy-state"
     docker volume create "$VOL" >/dev/null
     docker run -d --name "$PROXY" --restart unless-stopped \
-      --network none --read-only --security-opt no-new-privileges \
-      --cap-drop ALL --cap-add DAC_READ_SEARCH \
+      --network none --read-only --security-opt no-new-privileges --cap-drop ALL \
       -v /var/run/docker.sock:/var/run/docker.sock \
       -v "$VOL":/run/fk \
-      -v "$data":"$data":ro \
       -v "$data-proxy-state":/var/lib/fk-dockerproxy:ro \
       -e DATA_DIR="$data" -e FK_PROXY_MODE="$mode" -e FK_PROXY_LOG_ALLOWED=1 \
       "$image" fk-dockerproxy >/dev/null

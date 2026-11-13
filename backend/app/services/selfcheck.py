@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from app.config import GAME_IMAGE_REPO, NTSYNC_DEVICE, Settings
-from app.services.docker_adapter import DockerAdapter
+from app.services.docker_adapter import MIN_API, DockerAdapter
 
 log = logging.getLogger(__name__)
 
@@ -61,9 +61,15 @@ async def run_selfcheck(settings: Settings, docker: DockerAdapter) -> SelfCheckR
     try:
         version = await docker.ping()
         result.docker_version = version.get("Version")
-        checks.append(Check("docker", "Docker socket", "ok",
-                            f"Docker {version.get('Version')} (API {version.get('ApiVersion')})",
-                            fatal=True))
+        api = tuple(int(x) for x in str(version.get("ApiVersion", "0.0")).split(".")[:2])
+        detail = f"Docker {version.get('Version')} (API {version.get('ApiVersion')})"
+        if api < MIN_API:
+            checks.append(Check("docker", "Docker socket", "fail",
+                                f"{detail} is too old: FlameKeeper needs Docker Engine 26 or "
+                                "newer (API 1.45) to mount world folders safely. Upgrade "
+                                "Docker: https://docs.docker.com/engine/install/", fatal=True))
+            return result
+        checks.append(Check("docker", "Docker socket", "ok", detail, fatal=True))
     except Exception as e:
         checks.append(Check("docker", "Docker socket", "fail",
                             f"Cannot reach the Docker daemon: {e}. Mount /var/run/docker.sock.",

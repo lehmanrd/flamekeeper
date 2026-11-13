@@ -13,9 +13,6 @@
  },
  "Healthcheck": null,
  "HostConfig": {
-  "Binds": [
-   "/DATA/worlds/embervale/game:/opt/enshrouded:rw"
-  ],
   "Devices": [
    {
     "CgroupPermissions": "rwm",
@@ -31,6 +28,16 @@
    "Type": "json-file"
   },
   "Memory": 8589934592,
+  "Mounts": [
+   {
+    "Source": "flamekeeper-data",
+    "Target": "/opt/enshrouded",
+    "Type": "volume",
+    "VolumeOptions": {
+     "Subpath": "worlds/embervale/game"
+    }
+   }
+  ],
   "NanoCpus": 2000000000,
   "NetworkMode": "flamekeeper",
   "PortBindings": {

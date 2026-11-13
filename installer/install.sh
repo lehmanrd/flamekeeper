@@ -29,7 +29,8 @@ FK_INSTALL_DIR="${FK_INSTALL_DIR:-/opt/flamekeeper}"
 FK_BIN_DIR="${FK_BIN_DIR:-/usr/local/bin}"
 FK_SYSTEMD_DIR="${FK_SYSTEMD_DIR:-/etc/systemd/system}"
 FK_OS_RELEASE="${FK_OS_RELEASE:-/etc/os-release}"
-MIN_DOCKER="20.10"
+# Volume subpaths (API 1.45), which keep world folders from being swapped for a symlink.
+MIN_DOCKER="26.0"
 GAME_PORTS="15637:15646"
 
 # Filled in by the release build from installer/flamekeeper and compose.template.yml.
@@ -294,7 +295,8 @@ ensure_docker() {
 
   local version
   version="$(docker_cmd version --format '{{.Server.Version}}' 2>/dev/null || echo 0)"
-  version_ge "$version" "$MIN_DOCKER" || die "Docker $version is too old; FlameKeeper needs $MIN_DOCKER or newer."
+  version_ge "$version" "$MIN_DOCKER" ||
+    die "Docker $version is too old: FlameKeeper needs Docker Engine $MIN_DOCKER or newer (March 2024) to mount world folders safely. Upgrade it (https://docs.docker.com/engine/install/; distribution packages such as Debian's docker.io can lag behind), then re-run."
   ok "Docker $version"
 
   if ! docker_cmd compose version >/dev/null 2>&1; then

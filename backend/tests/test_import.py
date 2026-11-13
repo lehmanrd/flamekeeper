@@ -56,12 +56,13 @@ def _mornedhels(tmp: Path, fake: FakeDockerAdapter, *, running: bool = True,
 
 def _assert_narrow_helpers(fake: FakeDockerAdapter, settings: Settings,
                            allowed: list[Path]) -> None:
-    """Helpers never see the host's / or /dev: writable binds stay in DATA_DIR, and host
-    folders are read-only mounts inside `allowed` (docs/socket-proxy.md)."""
+    """Helpers never see the host's / or /dev: binds are DATA_DIR itself (never a folder
+    in it, which FlameKeeper could swap for a symlink), and host folders are read-only
+    mounts inside `allowed` (docs/socket-proxy.md)."""
     assert fake.helper_runs
     for run in fake.helper_runs:
         for host in run["binds"]:
-            assert Path(host).is_relative_to(settings.data_dir), run
+            assert Path(host) == settings.data_dir, run
         for host in run["ro_mounts"]:
             assert any(Path(host).is_relative_to(a) for a in allowed), run
         assert all(v.endswith(":ro") for v in run["volumes_from"]), run

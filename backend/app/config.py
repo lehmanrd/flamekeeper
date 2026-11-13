@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     # to the game container by name on this network when the controller runs in
     # a container; otherwise they go to a2s_host.
     docker_network: str = "flamekeeper"
+    # Local volume bound to DATA_DIR; world containers mount worlds/<slug>/game from it as
+    # a subpath, which Docker resolves without leaving the volume (docs/socket-proxy.md).
+    data_volume: str = "flamekeeper-data"
     a2s_mode: str = "auto"  # auto | network | host
     a2s_host: str = "127.0.0.1"
 

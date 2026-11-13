@@ -90,14 +90,20 @@ GAME_EXE = "enshrouded_server.exe"
 # Copied with the save and config, or the server's own output: not game files.
 NOT_GAME_FILES = frozenset({"savegame", "logs", "backups", "crash_dumps", CONFIG_NAME})
 GAME_COPY_TIMEOUT_S = 2 * 60 * 60
-# Game files from a host folder; $1 = install folder, $2 = save folder name to skip.
+# Game files from a host folder; $1 = install folder, $2 = save folder name to skip,
+# $3 = where to copy them.
 GAME_COPY_SCRIPT = ('cd "$1" || exit 1; for f in * .[!.]*; do '
                     '{ [ -e "$f" ] || [ -L "$f" ]; } || continue; '
                     'case "$f" in savegame|logs|backups|crash_dumps|enshrouded_server.json) '
                     'continue;; esac; [ "$f" = "$2" ] && continue; '
-                    'cp -a "$f" /out/ || exit 1; done')
-COPY_SCRIPT = ('set -e; mkdir -p /out/savegame; cp -R "$1"/. /out/savegame/; '
-               'if [ -n "$2" ]; then cp "$2" /out/enshrouded_server.json; fi')
+                    'cp -a "$f" "$3/" || exit 1; done')
+# Save folder $1 and config $2 into $3.
+COPY_SCRIPT = ('set -e; mkdir -p "$3/savegame"; cp -R "$1"/. "$3/savegame/"; '
+               'if [ -n "$2" ]; then cp "$2" "$3/enshrouded_server.json"; fi')
+# Helpers see DATA_DIR here. Only DATA_DIR itself is ever bound into a helper, never a
+# folder in it: FlameKeeper could swap that folder for a symlink before Docker mounts it
+# (docs/socket-proxy.md).
+DATA_MOUNT = "/data"
 
 
 def _now() -> datetime:
@@ -320,6 +326,10 @@ class ImportService:
         """Where the API streams an uploaded zip before scan_upload."""
         token, folder = self._new_token()
         return token, folder / "upload.zip"
+
+    def _in_helper(self, path: Path) -> str:
+        """Where a path in DATA_DIR is inside a helper (DATA_DIR at DATA_MOUNT)."""
+        return f"{DATA_MOUNT}/{path.relative_to(self.settings.data_dir).as_posix()}"
 
     async def _require_grant(self, *, container: ContainerInfo | None = None,
                              path: str | None = None, name: str | None = None) -> None:
@@ -670,8 +680,9 @@ class ImportService:
                 res = await self.docker.run_helper(
                     self.settings.helper_image,
                     ["sh", "-c", COPY_SCRIPT, "sh", HOST_ROOT + save,
-                     HOST_ROOT + config if config else ""],
-                    binds={str(stage): "/out"}, ro_mounts=_host_mount(source["host_path"]))
+                     HOST_ROOT + config if config else "", self._in_helper(stage)],
+                    binds={str(self.settings.data_dir): DATA_MOUNT},
+                    ro_mounts=_host_mount(source["host_path"]))
                 if res.exit_code != 0:
                     raise WorldError(f"Could not copy the savegame: {res.output.strip()}", 502)
                 cfg = stage / CONFIG_NAME
@@ -841,8 +852,10 @@ class ImportService:
                 return
             res = await self.docker.run_helper(
                 self.settings.helper_image,
-                ["sh", "-c", GAME_COPY_SCRIPT, "sh", HOST_ROOT + install, save_name],
-                binds={str(dest): "/out"}, ro_mounts=_host_mount(source["host_path"]),
+                ["sh", "-c", GAME_COPY_SCRIPT, "sh", HOST_ROOT + install, save_name,
+                 self._in_helper(dest)],
+                binds={str(self.settings.data_dir): DATA_MOUNT},
+                ro_mounts=_host_mount(source["host_path"]),
                 timeout=GAME_COPY_TIMEOUT_S)
             if res.exit_code != 0:
                 raise JobFailed(f"Could not copy the game files: {res.output.strip()}")

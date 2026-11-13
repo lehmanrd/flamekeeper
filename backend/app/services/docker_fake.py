@@ -40,6 +40,8 @@ class FakeDockerAdapter:
         self.host_udp_ports: set[int] = set()
         # Host devices a helper can be given (the ntsync check).
         self.host_devices: set[str] = {"/dev/ntsync"}
+        # Local volumes bound to a folder: name -> folder (the data volume).
+        self.data_volumes: dict[str, Path] = {}
         # The docker proxy's import grant; None = no proxy (everything allowed).
         self.grant: dict[str, Any] | None = None
         self.boot_delay = boot_delay
@@ -129,12 +131,23 @@ class FakeDockerAdapter:
         self.volumes |= {m.name for m in info.mounts if m.type == "volume" and m.name}
         return info
 
+    def _spec_mounts(self, spec: ContainerSpec | None) -> list[tuple[Path, str]]:
+        """(local folder, container path) for a spec's binds and volume subpaths."""
+        if spec is None:
+            return []
+        out = [(Path(h), t) for h, t in spec.binds.items()]
+        for v in spec.volumes:
+            if v.volume not in self.data_volumes:
+                raise DockerError(f"no such volume: {v.volume}")
+            out.append((self.data_volumes[v.volume] / v.subpath, v.target))
+        return out
+
     def _local(self, c: ContainerInfo, path: str) -> Path | None:
         """Where a path inside a container lives on this machine."""
         roots = [(m.destination, Path(m.source)) for m in c.mounts]
         roots += list(self.layers.get(c.id, {}).items())
         spec = self.specs.get(c.id)
-        roots += [(t, Path(h)) for h, t in (spec.binds if spec else {}).items()]
+        roots += [(t, h) for h, t in self._spec_mounts(spec)]
         best = None
         for dest, local in roots:
             dest = dest.rstrip("/") or "/"
@@ -249,10 +262,9 @@ class FakeDockerAdapter:
             self._start(c)
 
     def _server_dir(self, c: ContainerInfo) -> Path | None:
-        spec = self.specs.get(c.id)
-        for host, target in (spec.binds if spec else {}).items():
+        for host, target in self._spec_mounts(self.specs.get(c.id)):
             if target == "/opt/enshrouded":
-                return Path(host) / "server"
+                return host / "server"
         return None
 
     def _write_manifest(self, c: ContainerInfo, build: str) -> None:
@@ -311,10 +323,10 @@ class FakeDockerAdapter:
         spec = self.specs.get(c.id)
         if not spec:
             return
-        for host, target in spec.binds.items():
+        for host, target in self._spec_mounts(spec):
             if target != "/opt/enshrouded":
                 continue
-            save = Path(host) / "server" / "savegame"
+            save = host / "server" / "savegame"
             if save.exists() and any(save.iterdir()):
                 return
             try:
@@ -415,6 +427,11 @@ class FakeDockerAdapter:
     async def ensure_network(self, name: str) -> None:
         self.networks.add(name)
 
+    async def ensure_data_volume(self, name: str, device: Path) -> None:
+        if self.data_volumes.get(name, device) != device:
+            raise DockerError(f"The Docker volume {name} exists but isn't bound to {device}.")
+        self.data_volumes[name] = device
+
     async def connect_network(self, network: str, name_or_id: str) -> None:
         self._require(name_or_id)
 
@@ -454,7 +471,7 @@ class FakeDockerAdapter:
             return self._helper_find(cmd, binds or {}, volumes_from or [])
         if cmd[:2] == ["sh", "-c"] and "cp -a" in cmd[2]:
             return self._helper_game_copy(cmd, binds or {})
-        if cmd[:2] == ["sh", "-c"] and "/out/" in cmd[2]:
+        if cmd[:2] == ["sh", "-c"] and "/savegame" in cmd[2]:
             return self._helper_copy(cmd, binds or {})
         if cmd[:2] == ["test", "-f"] and binds and any(t.endswith(":ro") for t in binds.values()):
             local = self._helper_local(cmd[2], binds, [])
@@ -520,8 +537,8 @@ class FakeDockerAdapter:
         return ExecResult(0, "".join(f"{line}\n" for line in sorted(out)))
 
     def _helper_game_copy(self, cmd: list[str], binds: dict[str, str]) -> ExecResult:
-        """The importer's game-file copy: $1's entries into /out, minus saves and such."""
-        out = self._helper_local("/out", binds, [])
+        """The importer's game-file copy: $1's entries into $3, minus saves and such."""
+        out = self._helper_local(cmd[6], binds, [])
         src = self._helper_local(cmd[4], binds, [])
         if out is None or src is None or not src.is_dir():
             return ExecResult(1, f"sh: cd: can't cd to {cmd[4]}\n")
@@ -536,12 +553,13 @@ class FakeDockerAdapter:
         return ExecResult(0, "")
 
     def _helper_copy(self, cmd: list[str], binds: dict[str, str]) -> ExecResult:
-        """The importer's copy script: save folder ($1) and config ($2) into /out."""
-        out = self._helper_local("/out", binds, [])
+        """The importer's copy script: save folder ($1) and config ($2) into $3."""
+        out = self._helper_local(cmd[6], binds, [])
         save = self._helper_local(cmd[4], binds, [])
         config = self._helper_local(cmd[5], binds, []) if len(cmd) > 5 and cmd[5] else None
         if out is None or save is None or not save.is_dir():
             return ExecResult(1, f"cp: can't stat '{cmd[4]}'\n")
+        out.mkdir(parents=True, exist_ok=True)
         shutil.copytree(save, out / "savegame", dirs_exist_ok=True)
         if config is not None:
             shutil.copy2(config, out / "enshrouded_server.json")

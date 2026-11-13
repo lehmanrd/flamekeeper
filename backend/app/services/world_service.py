@@ -37,6 +37,7 @@ from app.services.docker_adapter import (
     ContainerSpec,
     DockerAdapter,
     DockerError,
+    VolumeMount,
     split_timestamp,
 )
 from app.services.events import EventLog
@@ -75,6 +76,9 @@ def infra_fingerprint(world: World, ntsync_available: bool) -> str:
     data = {f: getattr(world, f) for f in INFRA_FIELDS}
     data["image_repo"] = world.image_repo
     data["use_ntsync"] = bool(world.use_ntsync and ntsync_available)
+    # How the game folder is mounted. Containers from before the volume subpath (a bind,
+    # which FlameKeeper could swap for a symlink) show "restart required" until recreated.
+    data["game_mount"] = "volume-subpath"
     return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()[:16]
 
 
@@ -228,7 +232,9 @@ class WorldService:
             },
             env=env,
             ports={f"{world.query_port}/udp": (world.bind_ip, world.query_port)},
-            binds={str(paths.game): GAME_MOUNT},
+            volumes=[VolumeMount(self.settings.data_volume,
+                                 paths.game.relative_to(self.settings.data_dir).as_posix(),
+                                 GAME_MOUNT)],
             devices=devices,
             stop_timeout=world.stop_timeout_s,
             nano_cpus=int(world.cpu_limit * 1e9) if world.cpu_limit else None,
@@ -484,6 +490,7 @@ class WorldService:
             await self.docker.remove(name, force=True)
         if self.network:
             await self.docker.ensure_network(self.network)
+        await self.docker.ensure_data_volume(self.settings.data_volume, self.settings.data_dir)
         spec = self.container_spec(world)
         await self.docker.create_container(spec)
         self._poke(world.id)
