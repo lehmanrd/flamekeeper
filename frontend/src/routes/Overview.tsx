@@ -43,7 +43,7 @@ export function Overview() {
         </div>
         <div className="card stat">
           <div className="v">{formatBytes(host?.disk_free)} free</div>
-          <div className="l mono">{system?.data_dir ?? "Data disk"}</div>
+          <div className="l">Host disk · <span className="mono">{system?.data_dir ?? "data folder"}</span></div>
           {diskUsedPct != null && (
             <div className={`bar${diskUsedPct > 90 ? " warn" : ""}`}>
               <i style={{ width: `${diskUsedPct}%` }} />
