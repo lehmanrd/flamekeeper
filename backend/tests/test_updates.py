@@ -199,6 +199,11 @@ def test_manual_policy_and_window(client: TestClient, fake_docker: FakeDockerAda
     _status(client, wid, check=True)
     client.put(f"/api/worlds/{wid}/update-policy", json={"update_policy": "manual"})
     assert client.portal.call(services.updates.tick) == []
+    # Manual worlds still hear about a new build, once (Discord "Game update available").
+    assert client.portal.call(services.updates.tick) == []
+    announced = [e["data"]["build"] for e in client.get(f"/api/worlds/{wid}/events").json()
+                 if e["kind"] == "update_available"]
+    assert announced == ["23200000"]
 
     res = client.put(f"/api/worlds/{wid}/update-policy",
                      json={"update_policy": "window", "update_window_cron": "nonsense"})
