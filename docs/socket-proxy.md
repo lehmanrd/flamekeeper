@@ -1,6 +1,6 @@
 # Docker socket proxy
 
-Status: **steps 1–3 done** (see Steps). This is the plan for taking the Docker socket
+Status: **steps 1–4 done** (see Steps); installs run behind the proxy. This is the plan for taking the Docker socket
 away from the FlameKeeper container.
 
 ## Why
@@ -130,9 +130,15 @@ read-only would reach `docker.sock`. Hence:
 - `containers` match by name or ID; the grant covers stop/start/restart-policy/archive
   reads/removal of those containers, `volumes_from` them, and removing volumes.
 
-Step 4 adds the host command (`flamekeeper import --allow PATH|CONTAINER`, one-hour
-expiry; it should `realpath` the folder so a symlinked grant can't point somewhere else),
-and the UI tells the user to run it when the proxy refuses an import.
+The host command is `sudo flamekeeper import --allow PATH|CONTAINER...` (one hour; running
+it again replaces the grant; `--done` withdraws it, no argument shows it). It resolves
+folders through symlinks (and says so when that changes the path the user should enter),
+refuses `/`, paths with quotes, backslashes or control characters (the file is JSON
+written by a shell script), unknown containers and FlameKeeper's own. The proxy answers
+`GET /_fk/import-grant` itself with the current grant, so the importer checks before
+scanning, creating and each cleanup step, and the UI shows the exact command to run
+instead of an import failing halfway (some archive reads would otherwise look like "no
+savegame found").
 
 ## Code changes the policy needs
 
@@ -157,42 +163,25 @@ and the UI tells the user to run it when the proxy refuses an import.
    the proxy still lets FlameKeeper remove an old `flamekeeper.role=self-update`
    container, which a controller updated by the old helper does once.
 
-## Compose (installer template, step 4)
+## Compose (step 4)
 
-```yaml
-services:
-  dockerproxy:
-    image: ${FLAMEKEEPER_IMAGE}
-    command: ["fk-dockerproxy"]
-    restart: unless-stopped
-    network_mode: none
-    read_only: true
-    cap_drop: [ALL]
-    cap_add: [DAC_READ_SEARCH]
-    security_opt: [no-new-privileges]
-    volumes:
-      - ${DOCKER_SOCK}:/var/run/docker.sock
-      - fk-sock:/run/fk
-      - ${DATA_DIR}:${DATA_DIR}:ro
-      - ${INSTALL_DIR}/proxy:/var/lib/fk-dockerproxy:ro
-    environment:
-      - DATA_DIR=${DATA_DIR}
-      - FK_PROXY_MODE=enforce
-  flamekeeper:
-    # ...as now, without the docker.sock mount
-    labels: { flamekeeper.role: controller }
-    depends_on: [dockerproxy]
-    volumes:
-      - fk-sock:/run/fk
-      - ${DATA_DIR}:${DATA_DIR}
-    environment:
-      - DOCKER_HOST=unix:///run/fk/docker.sock
-volumes:
-  fk-sock:
-```
+See [`installer/compose.template.yml`](../installer/compose.template.yml) (and
+[`docker-compose.example.yml`](../docker-compose.example.yml), the same shape for people
+who manage compose themselves). In short:
 
-Existing installs move over on their next update: the current self-update runs
-`flamekeeper update`, which rewrites the compose file.
+- `dockerproxy` (container `flamekeeper-dockerproxy`): the host's Docker socket, the
+  shared `docker-proxy` volume at `/run/fk`, `DATA_DIR` read-only at the same path, and
+  `/opt/flamekeeper/proxy` (the import grant) read-only; no network, read-only root,
+  only `CAP_DAC_READ_SEARCH`, `no-new-privileges`. Healthy once its socket exists.
+- `flamekeeper`: no Docker socket; `DOCKER_HOST=unix:///run/fk/docker.sock`, the label
+  `flamekeeper.role=controller` (so it may join the `flamekeeper` network), and it starts
+  only after the proxy is healthy.
+- `FK_PROXY_MODE` comes from `.env` (default `enforce`) and is kept across re-installs;
+  `audit` is the escape hatch if enforcement ever blocks something legitimate.
+
+Existing installs move over on their next update: the old self-update runs the new
+release's installer, which writes this compose file; `compose up` creates the proxy, waits
+for it, and recreates the controller. Game containers keep running throughout.
 
 ## Steps
 
@@ -218,7 +207,15 @@ Existing installs move over on their next update: the current self-update runs
    install to the 0.6.3 release through the UI's API via the unit, with no helper
    container. Writing it also found that `flamekeeper update` reported success when the
    installer failed, if its caller tested its status (`set -e` doesn't apply there).
-4. Enforce mode in the installer's compose; drop the socket from FlameKeeper.
+4. **Enforce mode for installs** — done. The installer's compose and the example run the
+   proxy in enforce mode and FlameKeeper without the socket; `flamekeeper import`
+   writes grants; the importer checks the grant first and shows the command. Tested:
+   `e2e-clean-host.sh` (on a real install, the controller has no socket, a privileged
+   container from inside it is refused, and a host-folder import is refused with the
+   command, then allowed), `e2e-self-update.sh` (UI update from behind the proxy), and an
+   upgrade of a real 0.6.3 install with a world to this build (proxy created and healthy
+   before the controller, the world still managed, its container recreated through the
+   proxy, nothing denied). Writing it also found that busybox `realpath` has no `-e`.
 5. Later: non-root FlameKeeper (closes the symlink race).
 
 Once enforcing, a compromised FlameKeeper can only run unprivileged world and helper

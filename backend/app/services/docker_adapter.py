@@ -140,6 +140,7 @@ class DockerAdapter(Protocol):
     async def stats(self, name_or_id: str) -> ContainerStats | None: ...
     async def local_digest(self, image: str) -> str | None: ...
     async def registry_digest(self, image: str) -> str | None: ...
+    async def import_grant(self) -> dict[str, Any] | None: ...
 
 
 def _parse_ts(value: str | None) -> datetime | None:
@@ -604,6 +605,24 @@ class RealDockerAdapter:
         def _do() -> str | None:
             data = self.client.images.get_registry_data(image)
             return data.id
+
+        return await self._run(_do)
+
+    async def import_grant(self) -> dict[str, Any] | None:
+        """What the host admin allowed the importer to touch, from the docker proxy
+        (docs/socket-proxy.md): {"active", "until", "paths", "containers"}. None when
+        FlameKeeper talks to Docker directly, which allows everything."""
+
+        def _do() -> dict[str, Any] | None:
+            api = self.client.api
+            res = api.get(api._url("/_fk/import-grant"))
+            if res.status_code != 200:
+                return None
+            try:
+                data = res.json()
+            except ValueError:
+                return None
+            return data if isinstance(data, dict) and "active" in data else None
 
         return await self._run(_do)
 

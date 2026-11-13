@@ -499,3 +499,44 @@ def test_extract_tree_never_writes_through_links(tmp_path: Path) -> None:
     assert not (tmp_path / "evil").exists()
     assert (dest / "ok" / "file").read_bytes() == b"data"
     assert (dest / "z:").is_symlink()
+
+
+def test_behind_the_proxy_imports_need_the_admins_ok(
+    client: TestClient, fake_docker: FakeDockerAdapter, settings: Settings, tmp_path: Path
+) -> None:
+    """With the docker proxy, the importer asks for a grant before touching anything, and
+    tells the user the command to run (docs/socket-proxy.md)."""
+    _mornedhels(tmp_path, fake_docker, running=False)
+    native = tmp_path / "native"
+    (native / "savegame").mkdir(parents=True)
+    (native / "savegame" / "world0.ksd").write_bytes(b"native world")
+    fake_docker.grant = {"active": False, "until": 0, "paths": [], "containers": []}
+    helpers_before = len(fake_docker.helper_runs)  # the startup self-check runs some
+
+    res = client.post("/api/imports/scan", json={"kind": "container", "container": "enshrouded"})
+    assert res.status_code == 403
+    assert res.json()["detail"].endswith("sudo flamekeeper import --allow enshrouded")
+    res = client.post("/api/imports/scan", json={"kind": "host_path", "path": str(native)})
+    assert res.status_code == 403 and f"--allow {native}" in res.json()["detail"]
+    assert len(fake_docker.helper_runs) == helpers_before  # nothing was touched
+
+    fake_docker.grant = {"active": True, "until": 1, "paths": [str(native)],
+                         "containers": ["enshrouded"]}
+    container_scan = _scan(client, kind="container", container="enshrouded")
+    host_scan = _scan(client, kind="host_path", path=str(native))
+    # A grant for something else doesn't count; an ID prefix does.
+    fake_docker.grant = {"active": True, "until": 1, "paths": ["/elsewhere"],
+                         "containers": ["other"]}
+    for scan in (container_scan, host_scan):
+        res = client.post(f"/api/imports/{scan['token']}/create", json={"display_name": "E"})
+        assert res.status_code == 403
+    cid = fake_docker._find("enshrouded").id
+    fake_docker.grant["containers"] = [cid[:12]]
+    world = _import(client, container_scan["token"])
+
+    # Cleanup of the old server: needs the grant too.
+    fake_docker.grant = {"active": False, "until": 0, "paths": [], "containers": []}
+    res = client.post(f"/api/worlds/{world['id']}/import/remove-container")
+    assert res.status_code == 403 and "--allow enshrouded" in res.json()["detail"]
+    fake_docker.grant = {"active": True, "until": 1, "paths": [], "containers": ["enshrouded"]}
+    assert client.post(f"/api/worlds/{world['id']}/import/remove-container").status_code == 200

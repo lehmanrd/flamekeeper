@@ -63,6 +63,29 @@ on_host 'sudo journalctl -u flamekeeper-update.service --no-pager -o cat' | grep
 on_host 'sudo test ! -e /opt/flamekeeper/self-update/status.json'
 echo "   a malformed request is removed and refused"
 
+echo "== the docker proxy"
+on_host "sudo docker inspect flamekeeper --format '{{range .Mounts}}{{.Source}} {{end}}'" | grep -q docker.sock &&
+  { echo "unexpected: the controller has the Docker socket"; exit 1; }
+on_host 'sudo docker logs flamekeeper-dockerproxy 2>&1' | grep -q '"mode":"enforce"'
+echo "   controller has no Docker socket; proxy enforcing"
+# What a compromised controller would try: refused by the proxy.
+out="$(on_host "sudo docker exec flamekeeper python -c \"import docker; docker.from_env().containers.run('busybox:stable', 'true', privileged=True, labels={'flamekeeper.managed.helper': 'true'})\"" 2>&1 || true)"
+grep -q "FlameKeeper docker proxy" <<<"$out" || { echo "privileged container not refused: $out"; exit 1; }
+echo "   a privileged container from inside the controller is refused"
+# An import from a host folder needs the admin's OK on the host.
+on_host 'mkdir -p old-server/savegame && printf w > old-server/savegame/world0.ksd'
+api() { on_host "curl -sS -b cj -c cj -H 'X-FlameKeeper: 1' -H 'Content-Type: application/json' $*"; }
+api "-d '{\"username\": \"keeper\", \"password\": \"e2e-password\"}' localhost:8088/api/auth/login" >/dev/null
+scan() { api "-o /dev/stderr -w '%{http_code}' -d '{\"kind\": \"host_path\", \"path\": \"/home/gamer/old-server\"}' localhost:8088/api/imports/scan" 2>"$work/scan.json"; }
+if [[ "$(scan)" != 403 ]] || ! grep -q "sudo flamekeeper import --allow /home/gamer/old-server" "$work/scan.json"; then
+  echo "import without a grant: $(cat "$work/scan.json")"
+  exit 1
+fi
+on_host 'sudo flamekeeper import --allow /home/gamer/old-server' | sed 's/^/   /'
+[[ "$(scan)" == 200 ]] || { echo "import with a grant: $(cat "$work/scan.json")"; exit 1; }
+on_host 'sudo flamekeeper import --done' >/dev/null
+echo "   host-folder import: refused with the command to run, then allowed"
+
 echo "== CLI"
 on_host 'flamekeeper status'
 on_host 'flamekeeper doctor'

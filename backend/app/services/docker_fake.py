@@ -40,6 +40,8 @@ class FakeDockerAdapter:
         self.host_udp_ports: set[int] = set()
         # Host devices a helper can be given (the ntsync check).
         self.host_devices: set[str] = {"/dev/ntsync"}
+        # The docker proxy's import grant; None = no proxy (everything allowed).
+        self.grant: dict[str, Any] | None = None
         self.boot_delay = boot_delay
         self.emit_host_online = emit_host_online
         # Steam: the build a fresh install gets, and what steamcmd says is the latest.
@@ -415,6 +417,9 @@ class FakeDockerAdapter:
 
     async def connect_network(self, network: str, name_or_id: str) -> None:
         self._require(name_or_id)
+
+    async def import_grant(self) -> dict[str, Any] | None:
+        return self.grant
 
     async def run_helper(
         self,

@@ -1,20 +1,60 @@
 # FlameKeeper: Enshrouded dedicated server manager.
 # The one-line installer (installer/install.sh) writes an equivalent file to
 # /opt/flamekeeper/docker-compose.yml; use this one if you manage compose yourself.
+# Updating from the web UI needs the installer; here, pull the new image and `up -d`.
+name: flamekeeper
 services:
+  # FlameKeeper reaches Docker only through this proxy, which allows just what it needs
+  # (no privileged containers, no host folders outside DATA_DIR). See docs/socket-proxy.md.
+  dockerproxy:
+    image: ghcr.io/lehmanrd/flamekeeper:latest
+    container_name: flamekeeper-dockerproxy
+    command: ["fk-dockerproxy"]
+    restart: unless-stopped
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [DAC_READ_SEARCH]
+    security_opt: [no-new-privileges]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - docker-proxy:/run/fk
+      - /srv/flamekeeper:/srv/flamekeeper:ro
+      # Importing from a folder or container FlameKeeper didn't create: write
+      # {"until": <unix time>, "paths": ["/srv/old-server"], "containers": ["old"]}
+      # to ./proxy/import.json for as long as the import takes.
+      - ./proxy:/var/lib/fk-dockerproxy:ro
+    environment:
+      - DATA_DIR=/srv/flamekeeper
+      - FK_PROXY_MODE=enforce   # audit: log what it would refuse, refuse nothing
+    healthcheck:
+      test: ["CMD", "test", "-S", "/run/fk/docker.sock"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
   flamekeeper:
     image: ghcr.io/lehmanrd/flamekeeper:latest
     container_name: flamekeeper
     restart: unless-stopped
+    depends_on:
+      dockerproxy:
+        condition: service_healthy
+    labels:
+      flamekeeper.role: controller
     ports:
-      - "8080:8080"            # web UI (no login: keep it on a trusted network)
+      - "8080:8080"            # web UI (sign in with the admin account; HTTPS via a reverse proxy)
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - docker-proxy:/run/fk
       # DATA_DIR must be mounted at the SAME path inside and outside: FlameKeeper
       # creates game containers through the host's Docker, which needs host paths.
       - /srv/flamekeeper:/srv/flamekeeper
     environment:
       - DATA_DIR=/srv/flamekeeper
+      - DOCKER_HOST=unix:///run/fk/docker.sock
       - TZ=Etc/UTC
       # - BASE_PATH=/flamekeeper   # when served under a sub-path by a reverse proxy
     stop_grace_period: 30s
+
+volumes:
+  docker-proxy:

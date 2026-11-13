@@ -107,7 +107,32 @@ func needsBody(method, path string) bool {
 		(strings.HasPrefix(p, "/networks/") && strings.HasSuffix(p, "/connect"))
 }
 
+// grantPath is answered by the proxy itself: the current import grant, so FlameKeeper
+// can tell the user what to allow before an import fails halfway.
+const grantPath = "/_fk/import-grant"
+
+func (s *Server) serveGrant(w http.ResponseWriter) {
+	g := s.policy.grant()
+	if g == nil {
+		g = &importGrant{}
+	}
+	if g.Paths == nil {
+		g.Paths = []string{}
+	}
+	if g.Containers == nil {
+		g.Containers = []string{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"active": g.Until > 0, "until": g.Until, "paths": g.Paths, "containers": g.Containers,
+	})
+}
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "GET" && versionPrefix.ReplaceAllString(r.URL.Path, "/") == grantPath {
+		s.serveGrant(w)
+		return
+	}
 	var body []byte
 	var d Decision
 	if needsBody(r.Method, r.URL.Path) {

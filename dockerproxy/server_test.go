@@ -54,10 +54,14 @@ func fakeDocker(t *testing.T) string {
 	return sock
 }
 
+// grantPolicy is the policy behind the last startProxy, to write grants for it.
+var grantPolicy *Policy
+
 func startProxy(t *testing.T, mode string) *http.Client {
 	t.Helper()
 	upstream := fakeDocker(t)
 	p, _ := newTestPolicy(t)
+	grantPolicy = p
 	p.cfg.Mode = mode
 	transport := unixTransport(upstream)
 	p.insp = dockerInspector{client: &http.Client{Transport: transport}}
@@ -152,5 +156,27 @@ func TestServerUpgrade(t *testing.T) {
 	rest, _ := io.ReadAll(r)
 	if string(rest) != "hello from exec" {
 		t.Fatalf("stream after upgrade: %q", rest)
+	}
+}
+
+func TestServerGrantEndpoint(t *testing.T) {
+	c := startProxy(t, ModeEnforce)
+	get := func() map[string]any {
+		res, err := c.Get("http://docker/v1.47/_fk/import-grant")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var m map[string]any
+		json.NewDecoder(res.Body).Decode(&m)
+		return m
+	}
+	if g := get(); g["active"] != false || len(g["paths"].([]any)) != 0 {
+		t.Fatalf("no grant: %v", g)
+	}
+	grantImport(t, grantPolicy)
+	if g := get(); g["active"] != true || g["containers"].([]any)[0] != "old-server" ||
+		g["paths"].([]any)[0] != "/srv/old-server" {
+		t.Fatalf("with a grant: %v", g)
 	}
 }

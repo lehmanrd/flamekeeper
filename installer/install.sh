@@ -382,6 +382,7 @@ FK_BIND=""
 FK_DATA_DIR=""
 FK_TZ=""
 FK_BASE_PATH=""
+FK_PROXY_MODE=""
 resolve_settings() {
   local env_file="$FK_INSTALL_DIR/.env" version
   version="${OPT_VERSION:-}"
@@ -400,6 +401,9 @@ resolve_settings() {
   FK_TZ="$(env_get "$env_file" TZ)"
   FK_TZ="${FK_TZ:-$(detect_tz)}"
   FK_BASE_PATH="$(env_get "$env_file" BASE_PATH)"
+  # enforce, or audit (logs what it would refuse) as an escape hatch: docs/socket-proxy.md.
+  FK_PROXY_MODE="$(env_get "$env_file" FK_PROXY_MODE)"
+  [[ "$FK_PROXY_MODE" == audit ]] || FK_PROXY_MODE=enforce
 }
 
 render_env() {
@@ -412,6 +416,7 @@ DATA_DIR=$FK_DATA_DIR
 TZ=$FK_TZ
 BASE_PATH=$FK_BASE_PATH
 DOCKER_SOCK=$DOCKER_SOCK
+FK_PROXY_MODE=$FK_PROXY_MODE
 EOF
 }
 
@@ -443,7 +448,7 @@ write_files() {
   embedded_or_file "$EMBEDDED_CLI" flamekeeper |
     sed -e "s#__FK_REPO__#$FK_REPO#g" -e "s#__FK_INSTALL_DIR__#$FK_INSTALL_DIR#g" >"$tmp/flamekeeper"
 
-  as_root mkdir -p "$FK_INSTALL_DIR" "$FK_DATA_DIR" "$FK_INSTALL_DIR/self-update"
+  as_root mkdir -p "$FK_INSTALL_DIR" "$FK_DATA_DIR" "$FK_INSTALL_DIR/self-update" "$FK_INSTALL_DIR/proxy"
   as_root install -m 0644 "$tmp/.env" "$FK_INSTALL_DIR/.env"
   as_root install -m 0644 "$tmp/docker-compose.yml" "$FK_INSTALL_DIR/docker-compose.yml"
   as_root install -m 0755 "$tmp/flamekeeper" "$FK_BIN_DIR/flamekeeper"

@@ -30,6 +30,7 @@ import logging
 import posixpath
 import re
 import secrets
+import shlex
 import shutil
 import tarfile
 import tempfile
@@ -78,6 +79,8 @@ DEFAULT_QUERY_PORT = 15637
 # The host folder the user chose is mounted read-only at HOST_ROOT + its own path, and
 # everything is read inside it; never the host's / (docs/socket-proxy.md).
 HOST_ROOT = "/host"
+# Run on the host to let the importer touch a folder or container (docs/socket-proxy.md).
+GRANT_COMMAND = "sudo flamekeeper import --allow"
 STALE_AFTER = timedelta(hours=24)
 STOP_TIMEOUT_S = 120
 MAX_CONFIG_BYTES = 1024**2
@@ -318,12 +321,41 @@ class ImportService:
         token, folder = self._new_token()
         return token, folder / "upload.zip"
 
+    async def _require_grant(self, *, container: ContainerInfo | None = None,
+                             path: str | None = None, name: str | None = None) -> None:
+        """The docker proxy lets the importer touch a container FlameKeeper didn't create,
+        or a host folder, only when the host admin allows it. Check first, so the user
+        gets the command to run instead of an import that fails halfway. `name` alone:
+        any grant will do (removing the old container's volumes)."""
+        try:
+            grant = await self.docker.import_grant()
+        except DockerError:
+            grant = None
+        if grant is None:  # Docker directly: nothing to allow
+            return
+        allowed = bool(grant.get("active"))
+        if container is not None:
+            arg, what = container.name, f"the container {container.name}"
+            allowed = allowed and any(
+                g and (g.lstrip("/") == container.name or container.id.startswith(g))
+                for g in grant.get("containers") or [])
+        elif path is not None:
+            arg, what = shlex.quote(path), path
+            allowed = allowed and path in (grant.get("paths") or [])
+        else:
+            arg, what = name or "CONTAINER", f"what's left of {name}"
+        if not allowed:
+            raise WorldError(
+                f"FlameKeeper needs your OK on the server to touch {what}. Run this there, "
+                f"then try again (it's allowed for an hour): {GRANT_COMMAND} {arg}", 403)
+
     async def scan_container(self, name_or_id: str) -> dict[str, Any]:
         c = await self.docker.get_container(name_or_id)
         if c is None:
             raise WorldError(f"Container {name_or_id!r} not found", 404)
         if c.labels.get(LABEL_MANAGED):
             raise WorldError("FlameKeeper already manages this container", 409)
+        await self._require_grant(container=c)
         token, folder = self._new_token()
         try:
             source = {"kind": "container", "container_id": c.id, "container_name": c.name,
@@ -345,6 +377,7 @@ class ImportService:
         path = posixpath.normpath(path)
         if path == "/":
             raise WorldError("Choose the server's folder, not /", 422)
+        await self._require_grant(path=path)
         token, folder = self._new_token()
         try:
             source = {"kind": "host_path", "host_path": path, "label": path}
@@ -707,8 +740,11 @@ class ImportService:
         save = body.get("save_path") or scan["save_path"]
         if save != scan["save_path"] and save not in scan["save_options"]:
             raise WorldError("Choose one of the save folders the scan found", 422)
+        if scan["source"]["kind"] == "host_path":
+            await self._require_grant(path=scan["source"]["host_path"])
         if scan["source"]["kind"] == "container":
             c = await self._container(scan["source"])
+            await self._require_grant(container=c)
             if c.running and c.auto_remove:
                 raise WorldError(f"{c.name} was started with --rm, so stopping it would delete "
                                  "it. Stop it yourself, then scan it again.", 409)
@@ -952,6 +988,7 @@ class ImportService:
         if c is not None:
             if c.running:
                 raise WorldError(f"{c.name} is running again; stop it first", 409)
+            await self._require_grant(container=c)
             await self.docker.remove(c.id)
         self._set(world.id, state="container_removed")
         self.events.record(world.id, "import_cleanup", container=row.source_label)
@@ -963,6 +1000,7 @@ class ImportService:
             raise WorldError("This world wasn't imported from a container", 404)
         if row.state != "container_removed":
             raise WorldError("Remove the old container first", 409)
+        await self._require_grant(name=row.source_label)
         removed, kept = [], []
         for name in row.volumes:
             users = await self.docker.volume_users(name)

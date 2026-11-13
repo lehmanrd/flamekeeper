@@ -10,6 +10,9 @@ ENV_FILE="$FK_INSTALL_DIR/.env"
 # the log and result go out through here (root's; read-only in the controller).
 UPDATE_DIR="$FK_INSTALL_DIR/self-update"
 SYSTEMD_DIR="${FK_SYSTEMD_DIR:-/etc/systemd/system}"
+# What the importer may touch, read by the docker proxy only (docs/socket-proxy.md).
+GRANT_FILE="$FK_INSTALL_DIR/proxy/import.json"
+GRANT_SECONDS=3600
 
 die() {
   printf 'flamekeeper: %s\n' "$*" >&2
@@ -27,6 +30,10 @@ Usage: flamekeeper <command>
   update [--version v] [--no-firewall]
                       Upgrade FlameKeeper (re-runs the installer, keeps settings)
   doctor              Check Docker, ports, disk and the controller's self-check
+  import --allow PATH|CONTAINER...
+                      Let FlameKeeper import from this folder or container for an hour
+                      (replaces what was allowed before)
+  import [--done]     Show what FlameKeeper may import from, or withdraw it
   reset-admin         Set the admin username and password (first setup, or a forgotten
                       password). Signs everyone out.
   uninstall [--purge] Remove the controller. --purge also deletes all game servers,
@@ -119,6 +126,11 @@ cmd_update() {
   return "$rc"
 }
 
+# real_dir DIR: DIR with every symlink resolved (portable: busybox realpath has no -e).
+real_dir() {
+  (cd "$1" 2>/dev/null && pwd -P)
+}
+
 # newer A B: version A is newer than version B
 newer() {
   [[ "$1" != "$2" && "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1)" == "$1" ]]
@@ -146,7 +158,7 @@ cmd_update_request() {
   dir="$data_dir/self-update"
   req="$dir/request"
   # A symlinked folder could point the rm below somewhere else.
-  [[ "$(realpath -e "$dir" 2>/dev/null)" == "$dir" ]] || die "$dir isn't a plain folder"
+  [[ "$(real_dir "$dir")" == "$dir" ]] || die "$dir isn't a plain folder"
   if [[ ! -f "$req" || -L "$req" ]]; then
     rm -f -- "$req"
     die "no update request in $dir"
@@ -178,6 +190,81 @@ cmd_update_request() {
     write_status "$id" "$version" failed "$rc"
   fi
   return "$rc"
+}
+
+# json_list A B C → "A", "B", "C" (callers reject quotes, backslashes and control characters)
+json_list() {
+  local out="" item
+  for item in "$@"; do out+="${out:+, }\"$item\""; done
+  printf '%s' "$out"
+}
+
+grant_status() {
+  local until now
+  if [[ ! -f "$GRANT_FILE" ]]; then
+    echo "FlameKeeper may not import from anything (sudo flamekeeper import --allow PATH|CONTAINER)."
+    return 0
+  fi
+  until="$(sed -n 's/.*"until": *\([0-9]*\).*/\1/p' "$GRANT_FILE")"
+  now="$(date +%s)"
+  if [[ -z "$until" || "$until" -le "$now" ]]; then
+    echo "FlameKeeper may not import from anything (the last permission expired)."
+    return 0
+  fi
+  echo "FlameKeeper may import from these until $(date -d "@$until" '+%H:%M'):"
+  sed -n 's/.*"paths": *\[\(.*\)\], *"containers".*/\1/p' "$GRANT_FILE" | tr ',' '\n' |
+    sed -n 's/^ *"\(.*\)"$/  folder     \1/p'
+  sed -n 's/.*"containers": *\[\(.*\)\].*/\1/p' "$GRANT_FILE" | tr ',' '\n' |
+    sed -n 's/^ *"\(.*\)"$/  container  \1/p'
+}
+
+# The importer reads the old server's files and stops, starts and removes its container:
+# things outside FlameKeeper's own folder, which the docker proxy only allows for what the
+# admin names here. FlameKeeper can't write this file.
+cmd_import() {
+  need_install
+  case "${1:-}" in
+    "" | --status) grant_status; return ;;
+    --done)
+      [[ "$(id -u)" -eq 0 ]] || die "run as root (sudo flamekeeper import --done)"
+      rm -f "$GRANT_FILE"
+      echo "FlameKeeper may no longer import from anything."
+      return ;;
+    --allow) shift ;;
+    *) die "usage: flamekeeper import --allow PATH|CONTAINER... | --done" ;;
+  esac
+  [[ $# -gt 0 ]] || die "usage: flamekeeper import --allow PATH|CONTAINER..."
+  [[ "$(id -u)" -eq 0 ]] || die "run as root (sudo flamekeeper import --allow ...)"
+  local paths=() containers=() arg real until tmp
+  for arg in "$@"; do
+    if [[ "$arg" == /* ]]; then
+      [[ -d "$arg" ]] || die "$arg isn't a folder"
+      real="$(real_dir "$arg")" || die "$arg doesn't exist"
+      [[ "$real" != "/" ]] || die "choose the old server's folder, not /"
+      if [[ "$real" =~ [[:cntrl:]] || "$real" == *'"'* || "$real" == *"\\"* ]]; then
+        die "can't allow $arg: its path has quotes, backslashes or control characters"
+      fi
+      # The proxy compares the folder FlameKeeper mounts with this exactly.
+      [[ "$real" == "$arg" ]] || echo "Note: $arg is really $real; enter $real in FlameKeeper."
+      paths+=("$real")
+    else
+      [[ "$arg" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || die "$arg isn't a folder (start with /) or a container name"
+      dk inspect --type container "$arg" >/dev/null 2>&1 || die "there's no container named $arg"
+      if [[ "$(dk inspect --type container --format '{{index .Config.Labels "flamekeeper.managed"}}' "$arg")" == true ]]; then
+        die "$arg is already one of FlameKeeper's containers"
+      fi
+      containers+=("$arg")
+    fi
+  done
+  until=$(($(date +%s) + GRANT_SECONDS))
+  mkdir -p "$(dirname "$GRANT_FILE")"
+  tmp="$(mktemp "$(dirname "$GRANT_FILE")/.import.XXXXXX")"
+  printf '{"until": %s, "paths": [%s], "containers": [%s]}\n' "$until" \
+    "$(json_list "${paths[@]}")" "$(json_list "${containers[@]}")" >"$tmp"
+  chmod 0644 "$tmp"
+  mv -f "$tmp" "$GRANT_FILE"
+  grant_status
+  echo "Go back to FlameKeeper and try again. Withdraw early: sudo flamekeeper import --done"
 }
 
 remove_updater() {
@@ -221,7 +308,7 @@ cmd_uninstall() {
     read -r answer </dev/tty
     [[ "$answer" == "flamekeeper" ]] || die "aborted"
   fi
-  [[ -f "$FK_INSTALL_DIR/docker-compose.yml" ]] && compose down || true
+  [[ -f "$FK_INSTALL_DIR/docker-compose.yml" ]] && compose down --volumes || true
   remove_updater
   if [[ "$purge" == 1 ]]; then
     local ids=()
@@ -267,6 +354,7 @@ main() {
     restart) compose up -d --force-recreate ;;
     update) cmd_update "$@" ;;
     update-request) cmd_update_request ;;
+    import) cmd_import "$@" ;;
     doctor) cmd_doctor ;;
     reset-admin) cmd_reset_admin ;;
     uninstall) cmd_uninstall "$@" ;;

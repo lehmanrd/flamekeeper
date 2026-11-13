@@ -336,3 +336,92 @@ status_json() { cat "$FK_INSTALL_DIR/self-update/status.json"; }
     "$FK_INSTALL_DIR/docker-compose.yml"
   [ -d "$FK_INSTALL_DIR/self-update" ]
 }
+
+# A host for `flamekeeper import`: an install folder and a fake docker that knows an old
+# server container and one of FlameKeeper's own.
+import_host() {
+  sed -e 's#__FK_REPO__#someone/flamekeeper#' "$ROOT/installer/flamekeeper" >"$TMP/fk"
+  mkdir -p "$FK_INSTALL_DIR" "$TMP/stub" "$TMP/old-server"
+  touch "$FK_INSTALL_DIR/docker-compose.yml"
+  cat >"$TMP/stub/docker" <<'STUB'
+#!/usr/bin/env bash
+[[ "$1" == info ]] && exit 0
+name="${*: -1}"
+case "$name" in old-server | flamekeeper-embervale) ;; *) exit 1 ;; esac
+if [[ "$*" == *--format* ]]; then
+  [[ "$name" == flamekeeper-embervale ]] && echo true || echo ""
+fi
+STUB
+  chmod +x "$TMP/stub/docker"
+}
+
+fk_import() { PATH="$TMP/stub:$PATH" run bash "$TMP/fk" import "$@"; }
+grant() { cat "$FK_INSTALL_DIR/proxy/import.json"; }
+
+@test "flamekeeper import --allow writes a one-hour grant for the proxy" {
+  [ "$(id -u)" -eq 0 ] || skip "needs root"
+  import_host
+  fk_import
+  [ "$status" -eq 0 ] && [[ "$output" == *"may not import from anything"* ]]
+
+  fk_import --allow "$TMP/old-server" old-server
+  [ "$status" -eq 0 ]
+  [[ "$(grant)" =~ ^\{\"until\":\ [0-9]+,\ \"paths\":\ \[\"$TMP/old-server\"\],\ \"containers\":\ \[\"old-server\"\]\}$ ]]
+  local until
+  until="$(grant | sed 's/.*"until": \([0-9]*\).*/\1/')"
+  [ $((until - $(date +%s))) -gt 3500 ] && [ $((until - $(date +%s))) -le 3600 ]
+  fk_import
+  [[ "$output" == *"folder     $TMP/old-server"* && "$output" == *"container  old-server"* ]]
+
+  # A symlink is resolved: the proxy compares the real folder.
+  ln -s "$TMP/old-server" "$TMP/link"
+  fk_import --allow "$TMP/link"
+  [ "$status" -eq 0 ] && [[ "$output" == *"enter $TMP/old-server in FlameKeeper"* ]]
+  [[ "$(grant)" == *"\"paths\": [\"$TMP/old-server\"], \"containers\": []"* ]]
+
+  fk_import --done
+  [ "$status" -eq 0 ] && [ ! -e "$FK_INSTALL_DIR/proxy/import.json" ]
+}
+
+@test "flamekeeper import refuses what it shouldn't allow" {
+  [ "$(id -u)" -eq 0 ] || skip "needs root"
+  import_host
+  mkdir -p "$TMP/we\"ird"
+  local bad
+  for bad in / "$TMP/nope" "$TMP/we\"ird" "$FK_INSTALL_DIR/docker-compose.yml" \
+    flamekeeper-embervale no-such-container '$(id)' "-rf"; do
+    fk_import --allow "$bad"
+    [ "$status" -ne 0 ]
+  done
+  [ ! -e "$FK_INSTALL_DIR/proxy/import.json" ]
+  fk_import --allow
+  [ "$status" -ne 0 ]
+}
+
+@test "the controller reaches Docker only through the proxy" {
+  FK_BIN_DIR="$TMP/bin" FK_DATA_DIR="$TMP/data" DOCKER_SOCK=/var/run/docker.sock
+  mkdir -p "$FK_BIN_DIR"
+  write_files >/dev/null
+  local compose="$FK_INSTALL_DIR/docker-compose.yml" controller
+  # The socket is mounted once, in the dockerproxy service.
+  [ "$(grep -c ":/var/run/docker.sock" "$compose")" -eq 1 ]
+  controller="$(sed -n '/^  flamekeeper:/,$p' "$compose")"
+  [[ "$controller" != *"/var/run/docker.sock"* ]]
+  [[ "$controller" == *"DOCKER_HOST=unix:///run/fk/docker.sock"* ]]
+  [[ "$controller" == *"flamekeeper.role: controller"* ]]
+  grep -q "      - $FK_INSTALL_DIR/proxy:/var/lib/fk-dockerproxy:ro" "$compose"
+  [ -d "$FK_INSTALL_DIR/proxy" ]
+}
+
+@test "the proxy mode defaults to enforce and keeps an admin's audit" {
+  resolve_settings
+  [ "$FK_PROXY_MODE" = enforce ]
+  render_env | grep -qx "FK_PROXY_MODE=enforce"
+  mkdir -p "$FK_INSTALL_DIR"
+  echo "FK_PROXY_MODE=audit" >"$FK_INSTALL_DIR/.env"
+  resolve_settings
+  [ "$FK_PROXY_MODE" = audit ]
+  echo "FK_PROXY_MODE=off" >"$FK_INSTALL_DIR/.env"
+  resolve_settings
+  [ "$FK_PROXY_MODE" = enforce ]
+}

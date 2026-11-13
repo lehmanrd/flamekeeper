@@ -2,14 +2,46 @@
 # re-running the installer (or `flamekeeper update`) rewrites this file.
 name: flamekeeper
 services:
+  # FlameKeeper reaches Docker only through this proxy, which allows just what it needs:
+  # no privileged containers, no host folders outside DATA_DIR unless you allow them with
+  # `sudo flamekeeper import --allow`. See docs/socket-proxy.md.
+  dockerproxy:
+    image: ${FLAMEKEEPER_IMAGE}
+    container_name: flamekeeper-dockerproxy
+    command: ["fk-dockerproxy"]
+    restart: unless-stopped
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [DAC_READ_SEARCH]  # to check bind paths in DATA_DIR, whoever owns them
+    security_opt: [no-new-privileges]
+    volumes:
+      - ${DOCKER_SOCK}:/var/run/docker.sock
+      - docker-proxy:/run/fk
+      - ${DATA_DIR}:${DATA_DIR}:ro
+      - __FK_INSTALL_DIR__/proxy:/var/lib/fk-dockerproxy:ro
+    environment:
+      - DATA_DIR=${DATA_DIR}
+      - FK_PROXY_MODE=${FK_PROXY_MODE:-enforce}
+    healthcheck:
+      test: ["CMD", "test", "-S", "/run/fk/docker.sock"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
   flamekeeper:
     image: ${FLAMEKEEPER_IMAGE}
     container_name: flamekeeper
     restart: unless-stopped
+    depends_on:
+      dockerproxy:
+        condition: service_healthy
+    labels:
+      flamekeeper.role: controller
     ports:
       - "${FLAMEKEEPER_BIND}:${FLAMEKEEPER_PORT}:8080"
     volumes:
-      - ${DOCKER_SOCK}:/var/run/docker.sock
+      - docker-proxy:/run/fk
       # Same path inside and outside: game containers are created through the
       # host's Docker, which needs host paths.
       - ${DATA_DIR}:${DATA_DIR}
@@ -19,6 +51,10 @@ services:
       - DATA_DIR=${DATA_DIR}
       - TZ=${TZ}
       - BASE_PATH=${BASE_PATH}
+      - DOCKER_HOST=unix:///run/fk/docker.sock
       # Lets FlameKeeper update itself from the UI by running this command on the host.
       - FLAMEKEEPER_CLI=__FK_CLI__
     stop_grace_period: 30s
+
+volumes:
+  docker-proxy:
