@@ -13,6 +13,7 @@ import { StatusPill } from "../components/StatusPill";
 import { WorldActions } from "../components/WorldActions";
 import { formatTime, since } from "../format";
 import { useWorlds } from "../hooks/live";
+import { restartEventText } from "../settings/restarts";
 import { NotFound } from "./NotFound";
 
 export function useWorldBySlug(): { world: WorldSummary | undefined; loading: boolean } {
@@ -40,6 +41,7 @@ export const EVENT_TONE: Record<string, string> = {
   config_applied: "ok",
   update_available: "warn",
   updated: "ok",
+  scheduled_restart: "info",
 };
 
 export function eventDetail(e: WorldEvent): string {
@@ -49,6 +51,8 @@ export function eventDetail(e: WorldEvent): string {
     return d.from_build === d.to_build ? `game already at ${d.to_build}` : `game ${d.from_build ?? "?"} → ${d.to_build ?? "?"}`;
   }
   if (e.kind === "update_available") return `build ${d.build}`;
+  if (e.kind === "scheduled_restart") return restartEventText(d);
+  if (e.kind === "started" && d.reason === "scheduled") return `${d.mode ?? "process"} restart (scheduled)`;
   if (d.player) return `${d.player}${d.reason ? ` (${d.reason})` : ""}`;
   if (d.message) return String(d.message);
   if (d.mode) return `${d.mode} restart`;

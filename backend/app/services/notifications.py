@@ -39,6 +39,7 @@ EVENTS: dict[str, tuple[str, bool]] = {
     "update_available": ("Game update available", True),
     "updated": ("Update installed", True),
     "restored": ("Backup restored", True),
+    "scheduled_restart": ("Scheduled restart (or why one was skipped)", True),
     "job_failed": ("Something failed (backup, update, restore, start…)", True),
     "app_update_available": ("New FlameKeeper release", True),
     "app_updated": ("FlameKeeper updated (or the update failed)", True),
@@ -47,6 +48,12 @@ EVENTS: dict[str, tuple[str, bool]] = {
 # Events added later start at their default for those settings.
 _EVENTS_BEFORE_0_5 = ["online", "stopped", "crashed", "warning", "player_joined",
                       "player_left", "update_available", "updated", "restored", "job_failed"]
+
+SKIP_REASONS = {
+    "players_online": "Players were still online when the wait ran out.",
+    "recent_start": "The server came online recently.",
+    "restarted_meanwhile": "The server restarted while the restart was waiting.",
+}
 
 GREEN, RED, ORANGE, BLUE, GREY = 0x4FBF8F, 0xE2574C, 0xE3A33B, 0x5AA7D8, 0x9B9BB5
 JOB_LABELS = {
@@ -102,6 +109,14 @@ def event_message(kind: str, world: str, data: dict[str, Any]) -> dict[str, Any]
         before, after = data.get("from_build"), data.get("to_build")
         detail = f"Build {after}" if before == after else f"Build {before} → {after}"
         return embed(f"✅ {world} updated", GREEN, detail)
+    if kind == "scheduled_restart":
+        if data.get("outcome") == "restarting":
+            players = int(data.get("players") or 0)
+            detail = (f"{players} player(s) were still online after waiting."
+                      if players else "")
+            return embed(f"🔄 Scheduled restart of {world}", BLUE, detail)
+        return embed(f"⏭ Scheduled restart of {world} skipped", GREY,
+                     SKIP_REASONS.get(str(data.get("reason")), ""))
     if kind == "restored":
         return embed(f"♻ {world} restored from a backup", BLUE, str(data.get("filename", "")))
     return None

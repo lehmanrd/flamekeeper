@@ -27,10 +27,11 @@ from sqlalchemy import select
 from app.config import STEAM_APP_ID, Settings
 from app.db import session_scope
 from app.models import Job, World
-from app.services.backup_service import BackupService, cron_trigger
+from app.services.backup_service import BackupService
 from app.services.docker_adapter import DockerAdapter
 from app.services.events import EventLog
 from app.services.jobs import JobContext, JobFailed, JobManager
+from app.services.schedules import cron_trigger
 from app.services.world_paths import container_name, installed_build
 from app.services.world_service import FIRST_BOOT_TIMEOUT_S, WorldError, WorldService, _now
 

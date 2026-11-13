@@ -1,4 +1,4 @@
-"""Backups, restore, clone and backup schedules."""
+"""Backups, restore, clone, and the backup and restart schedules."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from app.schemas import (
     BackupScheduleUpdate,
     CloneRequest,
     JobRef,
+    RestartScheduleUpdate,
     RestoreRequest,
 )
 from app.services.backup_archive import latest_mtime
@@ -152,7 +153,7 @@ async def clone_world(
 @router.get("/schedules")
 async def get_schedules(world_id: str, services: Services = Depends(get_services)) -> list:
     world = services.worlds.get(world_id)
-    return [services.backups.schedule(world)]
+    return [services.backups.schedule(world), services.restarts.schedule(world)]
 
 
 @router.put("/schedules/backup")
@@ -161,3 +162,18 @@ async def put_backup_schedule(
 ) -> dict[str, Any]:
     world = services.worlds.get(world_id)
     return services.backups.update_schedule(world, body.model_dump(exclude_none=True))
+
+
+@router.get("/schedules/restart")
+async def get_restart_schedule(
+    world_id: str, services: Services = Depends(get_services)
+) -> dict[str, Any]:
+    return services.restarts.schedule(services.worlds.get(world_id))
+
+
+@router.put("/schedules/restart")
+async def put_restart_schedule(
+    world_id: str, body: RestartScheduleUpdate, services: Services = Depends(require_ready)
+) -> dict[str, Any]:
+    world = services.worlds.get(world_id)
+    return services.restarts.update_schedule(world, body.model_dump(exclude_none=True))

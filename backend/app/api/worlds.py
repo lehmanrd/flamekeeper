@@ -11,11 +11,11 @@ from app.api.deps import get_services, require_ready
 from app.logging_setup import redact
 from app.models import World
 from app.schemas import InfraPatch, JobRef, RestartRequest, StopRequest, WorldCreate
-from app.services.backup_service import validate_cron
 from app.services.capacity import capacity
 from app.services.container import Services
 from app.services.log_lines import is_noise, parse_line
 from app.services.ports import host_udp_ports_in_use
+from app.services.schedules import validate_cron
 from app.services.world_paths import container_name
 from app.services.world_service import CreateWorldInput
 

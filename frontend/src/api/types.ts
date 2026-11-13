@@ -380,6 +380,27 @@ export type BackupMode = "next_save" | "last_save" | "stop";
 
 export type ScheduleUpdate = Partial<Pick<BackupSchedule, "cron" | "enabled" | "skip_if_idle" | "retention_count" | "max_age_days">>;
 
+export interface RestartSchedule {
+  kind: "restart";
+  cron: string;
+  enabled: boolean;
+  /** Wait for players to leave before restarting. */
+  only_when_empty: boolean;
+  max_wait_min: number;
+  /** After max_wait_min with players still online: skip this slot or restart anyway. */
+  if_still_busy: "skip" | "restart";
+  /** Skip a slot when the server started less than this many hours ago. */
+  min_uptime_h: number;
+  last_run_at: string | null;
+  next_run_at: string | null;
+  /** Set while a due restart waits for players to leave. */
+  waiting_since: string | null;
+  upcoming: string[];
+  timezone: string;
+}
+
+export type RestartScheduleUpdate = Partial<Pick<RestartSchedule, "cron" | "enabled" | "only_when_empty" | "max_wait_min" | "if_still_busy" | "min_uptime_h">>;
+
 /* ---------- updates, metrics, players ---------- */
 
 export interface LatestMetrics {

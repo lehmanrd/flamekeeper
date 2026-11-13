@@ -124,6 +124,17 @@ class BackupScheduleUpdate(BaseModel):
     max_age_days: int | None = None
 
 
+class RestartScheduleUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    cron: str | None = Field(default=None, max_length=100)
+    enabled: bool | None = None
+    only_when_empty: bool | None = None
+    max_wait_min: int | None = None
+    if_still_busy: Literal["skip", "restart"] | None = None
+    min_uptime_h: int | None = None
+
+
 class UpdateRequest(BaseModel):
     target: Literal["game", "image"] = "game"
     when: Literal["now", "empty"] = "now"

@@ -12,9 +12,9 @@ from app.api.backups import CHUNK, MAX_UPLOAD_BYTES
 from app.api.deps import get_services, require_ready
 from app.api.worlds import world_detail
 from app.schemas import ImportCreate, ImportScanRequest
-from app.services.backup_service import validate_cron
 from app.services.capacity import capacity
 from app.services.container import Services
+from app.services.schedules import validate_cron
 from app.services.world_service import WorldError
 
 router = APIRouter()

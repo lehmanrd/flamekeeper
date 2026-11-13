@@ -16,8 +16,8 @@ from app.config import Settings
 from app.db import session_scope
 from app.models import Backup, PlayerSession, Schedule
 from app.services import backup_archive as archive
-from app.services.backup_service import next_runs, validate_cron
 from app.services.docker_fake import FakeDockerAdapter
+from app.services.schedules import next_runs, validate_cron
 from app.services.world_service import WorldError
 from tests.conftest import wait_for, wait_job
 from tests.test_lifecycle import _create

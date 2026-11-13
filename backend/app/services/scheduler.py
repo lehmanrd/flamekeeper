@@ -1,4 +1,4 @@
-"""Runs scheduled work: backups now, update checks and restarts later.
+"""Runs scheduled work: backups, restarts and update checks.
 
 The controller owns schedules, so the UI can show history, progress and the next run.
 Each tick checks every world's schedules against their cron expressions.
@@ -11,6 +11,7 @@ import logging
 import time
 
 from app.services.backup_service import BackupService
+from app.services.restart_schedule import RestartScheduler
 from app.services.update_service import UpdateService
 from app.services.world_service import WorldService
 
@@ -22,10 +23,12 @@ PRUNE_EVERY_S = 3600.0
 
 class Scheduler:
     def __init__(self, worlds: WorldService, backups: BackupService,
-                 updates: UpdateService | None = None, tick: float = TICK_S) -> None:
+                 updates: UpdateService | None = None,
+                 restarts: RestartScheduler | None = None, tick: float = TICK_S) -> None:
         self.worlds = worlds
         self.backups = backups
         self.updates = updates
+        self.restarts = restarts
         self.tick = tick
         self._task: asyncio.Task[None] | None = None
         self._last_prune = 0.0
@@ -47,6 +50,7 @@ class Scheduler:
         while True:
             try:
                 self.run_once()
+                await self.run_restarts()
                 if self.updates:
                     await self.updates.tick()
             except Exception:
@@ -68,4 +72,18 @@ class Scheduler:
                 log.exception("scheduled backup failed to start for %s", world.slug)
         if prune:
             self._last_prune = time.monotonic()
+        return started
+
+    async def run_restarts(self) -> list[str]:
+        """Start the scheduled restarts that are due; returns the jobs it started."""
+        started = []
+        if not self.restarts:
+            return started
+        for world in self.worlds.list():
+            try:
+                job = await self.restarts.run_due(world)
+                if job:
+                    started.append(job)
+            except Exception:
+                log.exception("scheduled restart failed to start for %s", world.slug)
         return started
